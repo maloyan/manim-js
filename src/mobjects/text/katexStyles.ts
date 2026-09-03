@@ -8,6 +8,19 @@ import { logger } from '../../utils/logger';
 
 let stylesPromise: Promise<void> | null = null;
 let fontOverrideInjected = false;
+let katexStylesheetUrl: string | null =
+  'https://cdn.jsdelivr.net/npm/katex@0.16.0/dist/katex.min.css';
+
+/**
+ * Configure the stylesheet loaded by {@link ensureKatexStyles}.
+ * Pass `null` when the application bundles KaTeX CSS itself.
+ */
+export function setKatexStylesheetUrl(url: string | null): void {
+  if (stylesPromise) {
+    throw new Error('KaTeX styles have already been requested');
+  }
+  katexStylesheetUrl = url;
+}
 
 /**
  * Inject a document-level CSS rule to ensure KaTeX respects font-size.
@@ -64,11 +77,16 @@ export function waitForKatexStyles(): Promise<void> {
     return stylesPromise;
   }
 
+  if (katexStylesheetUrl === null) {
+    stylesPromise = Promise.resolve();
+    return stylesPromise;
+  }
+
   stylesPromise = new Promise<void>((resolve) => {
     const link = document.createElement('link');
     link.id = 'manimweb-katex-styles';
     link.rel = 'stylesheet';
-    link.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.0/dist/katex.min.css';
+    link.href = katexStylesheetUrl!;
     link.crossOrigin = 'anonymous';
     link.onload = () => resolve();
     link.onerror = () => {

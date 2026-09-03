@@ -19,7 +19,7 @@ export { Paragraph, type ParagraphOptions } from './Paragraph';
 export { MarkupText, type MarkupTextOptions, type StyledTextSegment } from './MarkupText';
 
 // KaTeX styles helper
-export { ensureKatexStyles, areKatexStylesLoaded } from './katexStyles';
+export { ensureKatexStyles, areKatexStylesLoaded, setKatexStylesheetUrl } from './katexStyles';
 
 // MathTex - SVG vector-based LaTeX rendering (default, like Python Manim)
 export { MathTex, type MathTexOptions, MathTexSVG, type MathTexSVGOptions } from './MathTex';
@@ -33,6 +33,7 @@ export {
   preloadMathJax,
   isMathJaxLoaded,
   katexCanRender,
+  setMathJaxScriptUrl,
   type MathJaxRenderOptions,
   type MathJaxRenderResult,
 } from './MathJaxRenderer';

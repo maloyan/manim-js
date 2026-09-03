@@ -287,11 +287,13 @@ export {
   type TexOptions,
   ensureKatexStyles,
   areKatexStylesLoaded,
+  setKatexStylesheetUrl,
   // MathJax renderer (full LaTeX support, dynamic import)
   renderLatexToSVG,
   preloadMathJax,
   isMathJaxLoaded,
   katexCanRender,
+  setMathJaxScriptUrl,
   type MathJaxRenderOptions,
   type MathJaxRenderResult,
   // SVG path parser
