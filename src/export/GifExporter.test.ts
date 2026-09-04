@@ -98,6 +98,8 @@ describe('GifExporter', () => {
     expect(opts.workers).toBe(4);
     expect(opts.repeat).toBe(0);
     expect(typeof opts.onProgress).toBe('function');
+    expect(opts.workerScriptUrl).toBe('/node_modules/gif.js/dist/gif.worker.js');
+    expect(opts.allowCdnFallback).toBe(true);
   });
 
   it('constructor uses provided options over defaults', () => {
@@ -210,6 +212,25 @@ describe('GifExporter', () => {
     await expect((exporter as any)._createWorkerBlobUrl()).rejects.toThrow(
       'Failed to load gif.js worker script',
     );
+  });
+
+  it('_createWorkerBlobUrl supports a configured worker and disabled CDN fallback', async () => {
+    const scene = createMockScene();
+    const exporter = new GifExporter(scene, {
+      workerScriptUrl: '/assets/gif.worker.js',
+      allowCdnFallback: false,
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve({ ok: false })),
+    );
+
+    await expect((exporter as any)._createWorkerBlobUrl()).rejects.toThrow(
+      'Failed to load configured gif.js worker script',
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith('/assets/gif.worker.js');
   });
 
   // ---- exportTimeline ----

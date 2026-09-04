@@ -128,6 +128,18 @@ let mathjaxModule: MathJaxModuleState | null = null;
 
 /** Promise for the in-flight import (prevents duplicate loads) */
 let mathjaxLoadPromise: Promise<MathJaxModuleState> | null = null;
+let mathjaxScriptUrl: string | null = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg-full.js';
+
+/**
+ * Configure the browser script used if the bundled MathJax modules cannot load.
+ * Pass `null` to disable the network fallback.
+ */
+export function setMathJaxScriptUrl(url: string | null): void {
+  if (mathjaxLoadPromise) {
+    throw new Error('MathJax loading has already started');
+  }
+  mathjaxScriptUrl = url;
+}
 
 /**
  * Probe whether `RegisterHTMLHandler` actually populated the `mathjax`
@@ -205,7 +217,11 @@ async function loadMathJax(): Promise<MathJaxModuleState> {
         return result;
       }
 
-      // Load from CDN
+      if (mathjaxScriptUrl === null) {
+        throw new Error('MathJax npm modules failed and the script fallback is disabled');
+      }
+
+      // Load the configured browser script
       await new Promise<void>((resolve, reject) => {
         // Configure before loading
         win.MathJax = {
@@ -233,7 +249,7 @@ async function loadMathJax(): Promise<MathJaxModuleState> {
         };
 
         const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg-full.js';
+        script.src = mathjaxScriptUrl!;
         script.async = true;
         script.onerror = () => reject(new Error('Failed to load MathJax from CDN'));
         document.head.appendChild(script);

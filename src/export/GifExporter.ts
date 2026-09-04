@@ -20,6 +20,10 @@ interface GifExportOptions {
   workers?: number; // default 4
   repeat?: number; // 0 = loop forever, -1 = no repeat, default 0
   onProgress?: (progress: number) => void;
+  /** Worker source to fetch and wrap in a same-origin Blob URL. */
+  workerScriptUrl?: string;
+  /** Whether a failed worker fetch may fall back to jsDelivr. Default: true. */
+  allowCdnFallback?: boolean;
 }
 
 export class GifExporter {
@@ -37,6 +41,8 @@ export class GifExporter {
       workers: options?.workers ?? 4,
       repeat: options?.repeat ?? 0,
       onProgress: options?.onProgress ?? (() => {}),
+      workerScriptUrl: options?.workerScriptUrl ?? '/node_modules/gif.js/dist/gif.worker.js',
+      allowCdnFallback: options?.allowCdnFallback ?? true,
     };
   }
 
@@ -146,8 +152,11 @@ export class GifExporter {
    */
   private async _createWorkerBlobUrl(): Promise<string> {
     // In Vite dev mode, node_modules are served at their package paths
-    const response = await fetch('/node_modules/gif.js/dist/gif.worker.js');
+    const response = await fetch(this._options.workerScriptUrl);
     if (!response.ok) {
+      if (!this._options.allowCdnFallback) {
+        throw new Error('Failed to load configured gif.js worker script');
+      }
       // Fallback: try CDN
       const cdnResponse = await fetch(
         'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.worker.js',
