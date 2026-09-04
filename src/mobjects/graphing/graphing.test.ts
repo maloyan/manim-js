@@ -79,6 +79,18 @@ describe('NumberLine', () => {
       expect(nl.color).toBe('#ff0000');
     });
 
+    // MIGRATION: example for the property
+    //   Every generated numeric label inherits its NumberLine color.
+    it('should apply the custom color to number labels', () => {
+      const nl = new NumberLine({
+        color: '#6b6680',
+        includeNumbers: true,
+        numbersToInclude: [1],
+      });
+      expect(nl.getNumberLabels()).toHaveLength(1);
+      expect(nl.getNumberLabels()[0].color).toBe('#6b6680');
+    });
+
     it('should accept custom strokeWidth', () => {
       const nl = new NumberLine({ strokeWidth: 4 });
       expect(nl.strokeWidth).toBe(4);

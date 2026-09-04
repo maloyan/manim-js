@@ -178,7 +178,7 @@ export class NumberLine extends VMobject {
         const label = new MathTexImage({
           latex: labelText,
           fontSize: this._numberFontSize,
-          color: '#ffffff',
+          color: this.color,
         });
         // Position below the tick with enough clearance (account for elongated ticks)
         const ts = elongatedSetForLabels.has(Math.round(n * 1e9) / 1e9)
