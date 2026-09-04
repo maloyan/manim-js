@@ -796,7 +796,7 @@ describe('SpiralIn', () => {
 });
 
 // =============================================================================
-// Create _childAlpha via lagRatio
+// Create - lagRatio stagger (Animation.getSubAlpha, the ported get_sub_alpha)
 // =============================================================================
 
 describe('Create - lagRatio stagger', () => {
@@ -815,6 +815,51 @@ describe('Create - lagRatio stagger', () => {
     anim.interpolate(0.5);
     // Single mobject fallback: opacity-based
     expect(m.opacity).toBeCloseTo(0.5, 5);
+  });
+});
+
+describe('Animation.getSubAlpha (Manim CE get_sub_alpha formula)', () => {
+  // getSubAlpha is `protected` on Animation; Create is a concrete subclass we
+  // already construct everywhere else in this file, so reach it the same way
+  // the rest of the suite reaches other protected members (e.g. Write.lagRatio).
+  function subAlpha(anim: Create, alpha: number, index: number, count: number, lagRatio: number) {
+    return (
+      anim as unknown as {
+        getSubAlpha: (a: number, i: number, c: number, l: number) => number;
+      }
+    ).getSubAlpha(alpha, index, count, lagRatio);
+  }
+
+  it('returns alpha unchanged when lagRatio<=0 or a single member', () => {
+    const anim = new Create(new Mobject());
+    expect(subAlpha(anim, 0.42, 0, 1, 0.9)).toBeCloseTo(0.42, 10);
+    expect(subAlpha(anim, 0.42, 0, 5, 0)).toBeCloseTo(0.42, 10);
+  });
+
+  it('matches the documented 3-member, lagRatio=0.5 staircase', () => {
+    // member i's window is [0.25*i, 0.5 + 0.25*i] — see the lag-ratio audit.
+    const anim = new Create(new Mobject());
+    for (let i = 0; i < 3; i++) {
+      const start = 0.25 * i;
+      const end = 0.5 + 0.25 * i;
+      expect(subAlpha(anim, start, i, 3, 0.5)).toBeCloseTo(0, 10);
+      expect(subAlpha(anim, end, i, 3, 0.5)).toBeCloseTo(1, 10);
+      expect(subAlpha(anim, (start + end) / 2, i, 3, 0.5)).toBeCloseTo(0.5, 10);
+    }
+  });
+
+  it('clips outside its own window instead of going negative or past 1', () => {
+    const anim = new Create(new Mobject());
+    // member 2 of 3 (lagRatio=0.5) only starts moving at alpha=0.5
+    expect(subAlpha(anim, 0.1, 2, 3, 0.5)).toBe(0);
+    expect(subAlpha(anim, 1, 0, 3, 0.5)).toBe(1);
+  });
+});
+
+describe('VMobjectRendering.getOwnStrokeLines', () => {
+  it('returns an empty array for a VMobject with no points (no crash)', () => {
+    const v = new VMobject();
+    expect(v.getOwnStrokeLines()).toEqual([]);
   });
 });
 

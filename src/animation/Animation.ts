@@ -151,6 +151,22 @@ export abstract class Animation {
   abstract interpolate(alpha: number): void;
 
   /**
+   * Manim CE's `get_sub_alpha`: remaps a global progress `alpha` into the
+   * local progress of family member `index` (of `count`) under a `lagRatio`
+   * stagger. With `lagRatio <= 0` (or a single member), every member tracks
+   * `alpha` directly. Subclasses that stagger across a mobject's family
+   * (e.g. Create) should index this by `familyMembersWithPoints()`, never by
+   * rendering-layer primitives.
+   */
+  protected getSubAlpha(alpha: number, index: number, count: number, lagRatio: number): number {
+    if (lagRatio <= 0 || count <= 1) return alpha;
+    const fullLength = (count - 1) * lagRatio + 1;
+    const value = alpha * fullLength;
+    const lower = index * lagRatio;
+    return Math.max(0, Math.min(1, value - lower));
+  }
+
+  /**
    * Update the animation for the current frame.
    * @param _dt Time delta since last frame (unused, but available for subclasses)
    * @param currentTime Current time in the timeline
