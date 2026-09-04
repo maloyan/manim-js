@@ -76,7 +76,7 @@ export function hasLine2Children(mobject: Mobject): boolean {
 }
 
 export interface CreateOptions extends AnimationOptions {
-  /** Stagger ratio between submobjects (0 = simultaneous, higher = more stagger). Default: 0 */
+  /** Stagger ratio between submobjects (0 = simultaneous, 1 = fully sequential). Default: 1 (matches Manim CE/3b1b) */
   lagRatio?: number;
 }
 
@@ -105,7 +105,9 @@ export class Create extends Animation {
   constructor(mobject: Mobject, options: CreateOptions = {}) {
     // Manim default for Create is 2 seconds
     super(mobject, { duration: options.duration ?? 2, ...options });
-    this._lagRatio = options.lagRatio ?? 0;
+    // Manim CE / 3b1b default: lag_ratio=1.0 — submobjects draw sequentially,
+    // each completing before the next starts (#544).
+    this._lagRatio = options.lagRatio ?? 1;
   }
 
   /**

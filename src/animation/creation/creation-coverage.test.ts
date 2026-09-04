@@ -21,6 +21,7 @@ import { describe, it, expect } from 'vitest';
 import { Mobject } from '../../core/Mobject';
 import { VMobject } from '../../core/VMobject';
 import { PointMobject } from '../../mobjects/point';
+import { DashedLine } from '../../mobjects/geometry/DashedLine';
 import {
   Create,
   create,
@@ -815,6 +816,59 @@ describe('Create - lagRatio stagger', () => {
     anim.interpolate(0.5);
     // Single mobject fallback: opacity-based
     expect(m.opacity).toBeCloseTo(0.5, 5);
+  });
+});
+
+describe('Create - default lagRatio is 1.0, matching Manim CE/3b1b (#544)', () => {
+  // getSubAlpha is `protected`; reach it the same way the rest of this file
+  // reaches other protected members (e.g. Write.lagRatio via `as any`).
+  function subAlpha(anim: Create, alpha: number, index: number, count: number, lagRatio: number) {
+    return (
+      anim as unknown as {
+        getSubAlpha: (a: number, i: number, c: number, l: number) => number;
+      }
+    ).getSubAlpha(alpha, index, count, lagRatio);
+  }
+
+  it('defaults to 1 (sequential) when no lagRatio option is given', () => {
+    const anim = new Create(new DashedLine());
+    expect((anim as unknown as { _lagRatio: number })._lagRatio).toBe(1);
+  });
+
+  it('exact #544 scenario: DashedLine, no explicit lagRatio, members do not all share one subAlpha', () => {
+    // Issue #544's own repro: `new Create(dashedLine, { duration: 1 })` — no
+    // lagRatio — expected the 11 dashes to draw one after another, not all
+    // simultaneously. Reproduced here via the public family/subAlpha surface
+    // rather than Line2.material.dashSize: Line2 never builds under this
+    // suite's happy-dom environment (see every other "VMobject without
+    // Line2" test in this file) — a pre-existing, unrelated limitation.
+    const dashed = new DashedLine({
+      start: [-3, 0, 0],
+      end: [3, 0, 0],
+      dashLength: 0.6,
+      dashRatio: 0.5,
+    });
+    const anim = new Create(dashed, { duration: 1 }); // no lagRatio — must use the default
+
+    const defaultLagRatio = (anim as unknown as { _lagRatio: number })._lagRatio;
+    expect(defaultLagRatio).toBe(1);
+
+    const family = dashed.familyMembersWithPoints();
+    expect(family.length).toBe(dashed.getDashes().length);
+    expect(family.length).toBeGreaterThan(1); // otherwise lagRatio can't matter
+
+    // Before #544's fix, every dash reached the same visibleFraction at every
+    // alpha (see the issue's own evidence table). With lagRatio=1 and real
+    // family members, they must NOT all get the same subAlpha mid-animation.
+    const subAlphas = family.map((_, i) => subAlpha(anim, 0.5, i, family.length, defaultLagRatio));
+    const distinct = new Set(subAlphas.map((v) => v.toFixed(6)));
+    expect(distinct.size).toBeGreaterThan(1);
+
+    // And it must be genuinely sequential: dash 0 finishes before dash 1
+    // starts moving (lagRatio=1 semantics), matching Manim's "each completes
+    // before the next begins".
+    expect(subAlpha(anim, 1 / family.length, 0, family.length, defaultLagRatio)).toBeCloseTo(1, 10);
+    expect(subAlpha(anim, 1 / family.length, 1, family.length, defaultLagRatio)).toBeCloseTo(0, 10);
   });
 });
 
