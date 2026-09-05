@@ -261,11 +261,15 @@ export class Axes extends Group {
     const xNorm = xMax !== xMin ? (x - xMin) / (xMax - xMin) : 0.5;
     const yNorm = yMax !== yMin ? (y - yMin) / (yMax - yMin) : 0.5;
 
-    // Convert to visual coordinates (centered at origin)
+    // Convert to visual coordinates (centered at origin), then apply this
+    // Axes' full transform (position, rotation, scale, and any ancestors') —
+    // a plain position offset ignores rotation/scale applied via animations
+    // like Rotate, so a transformed Axes would map coordinates as if it were
+    // still in its original orientation (#534).
     const visualX = (xNorm - 0.5) * this._xLength;
     const visualY = (yNorm - 0.5) * this._yLength;
 
-    return [visualX + this.position.x, visualY + this.position.y, this.position.z];
+    return this._localToWorld([visualX, visualY, 0]);
   }
 
   /**
@@ -277,9 +281,9 @@ export class Axes extends Group {
     const [xMin, xMax] = this._xRange;
     const [yMin, yMax] = this._yRange;
 
-    // Get local coordinates
-    const localX = point[0] - this.position.x;
-    const localY = point[1] - this.position.y;
+    // Inverse of coordsToPoint's full transform (position, rotation, scale,
+    // ancestors) — see #534.
+    const [localX, localY] = this._worldToLocal(point);
 
     // Convert from visual to normalized (0 to 1)
     const xNorm = localX / this._xLength + 0.5;
