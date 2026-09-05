@@ -64,6 +64,36 @@ export function getLine2TotalLength(child: Line2): number {
 }
 
 /**
+ * Reveal (or erase) a Line2's dashed stroke up to `visibleLength` out of
+ * `totalLen`. When nothing is revealed yet (or nothing remains), the line is
+ * hidden outright instead of being left at `dashSize=0`.
+ *
+ * Manim CE's partial-stroke reveal (pointwise_become_partial) has no
+ * unrevealed-tip artifact because the undrawn portion has no geometry at
+ * all. Three.js's LineMaterial dashed-line discard test degenerates at
+ * `dashSize=0` (see its own `// todo - FIX` comment at
+ * `three/examples/jsm/lines/LineMaterial.js`, in the fragment shader's
+ * `mod(vLineDistance + dashOffset, dashSize + gapSize) > dashSize` check) and
+ * leaves a stray fragment visible at the line's start anchor -- normally a
+ * single easy-to-miss frame on a solid shape, but glaring on something like
+ * DashedLine where a dozen independent Line2 dashes sit at `dashSize=0`
+ * simultaneously for most of the animation. Toggling `visible` sidesteps the
+ * shader edge case entirely, matching Manim CE's "doesn't exist yet"
+ * semantics.
+ */
+export function setLine2RevealLength(line: Line2, visibleLength: number, totalLen: number): void {
+  if (visibleLength <= 1e-9) {
+    line.visible = false;
+    return;
+  }
+  line.visible = true;
+  const material = line.material as LineMaterial;
+  material.dashSize = visibleLength;
+  material.gapSize = Math.max(0.0001, totalLen - visibleLength + 0.0001);
+  material.needsUpdate = true;
+}
+
+/**
  * Check whether a mobject's Three.js subtree contains at least one Line2 child.
  * Used by Create-family animations to decide between dash-based reveal and opacity fallback.
  */
@@ -155,9 +185,7 @@ export class Create extends Animation {
           lengths.push(totalLen);
 
           // Start with nothing visible
-          material.dashSize = 0;
-          material.gapSize = totalLen;
-          material.needsUpdate = true;
+          setLine2RevealLength(line, 0, totalLen);
         }
         this._memberLines.push(lines);
         this._memberLineLengths.push(lengths);
@@ -211,10 +239,7 @@ export class Create extends Animation {
     for (let i = 0; i < lines.length; i++) {
       const totalLen = lengths[i];
       const visibleLength = Math.max(0, Math.min(totalLen, remaining));
-      const material = lines[i].material as LineMaterial;
-      material.dashSize = visibleLength;
-      material.gapSize = totalLen - visibleLength + 0.0001;
-      material.needsUpdate = true;
+      setLine2RevealLength(lines[i], visibleLength, totalLen);
       remaining -= totalLen;
     }
   }
@@ -245,11 +270,10 @@ export class Create extends Animation {
           for (let i = 0; i < n; i++) {
             for (let j = 0; j < this._memberLines[i].length; j++) {
               const totalLen = this._memberLineLengths[i][j];
-              const material = this._memberLines[i][j].material as LineMaterial;
+              const line = this._memberLines[i][j];
+              const material = line.material as LineMaterial;
               if (material.dashed) {
-                material.dashSize = totalLen;
-                material.gapSize = 0.0001;
-                material.needsUpdate = true;
+                setLine2RevealLength(line, totalLen, totalLen);
               }
             }
           }
@@ -279,6 +303,7 @@ export class Create extends Animation {
       // Disable dashing, show full stroke
       for (const lines of this._memberLines) {
         for (const line of lines) {
+          line.visible = true;
           const material = line.material as LineMaterial;
           material.dashed = false;
           material.needsUpdate = true;
@@ -336,9 +361,7 @@ export class DrawBorderThenFill extends Animation {
           material.dashScale = 1;
           child.computeLineDistances();
           this._totalLength = getLine2TotalLength(child);
-          material.dashSize = 0;
-          material.gapSize = this._totalLength;
-          material.needsUpdate = true;
+          setLine2RevealLength(child, 0, this._totalLength);
         }
       });
     }
@@ -354,11 +377,8 @@ export class DrawBorderThenFill extends Animation {
         const threeObj = this.mobject.getThreeObject();
         threeObj.traverse((child) => {
           if (child instanceof Line2) {
-            const material = child.material as LineMaterial;
             const visibleLength = strokeAlpha * this._totalLength;
-            material.dashSize = visibleLength;
-            material.gapSize = this._totalLength - visibleLength + 0.0001;
-            material.needsUpdate = true;
+            setLine2RevealLength(child, visibleLength, this._totalLength);
           }
         });
       } else {
@@ -370,6 +390,7 @@ export class DrawBorderThenFill extends Animation {
         const threeObj = this.mobject.getThreeObject();
         threeObj.traverse((child) => {
           if (child instanceof Line2) {
+            child.visible = true;
             const material = child.material as LineMaterial;
             if (material.dashed) {
               material.dashed = false;
@@ -390,6 +411,7 @@ export class DrawBorderThenFill extends Animation {
       const threeObj = this.mobject.getThreeObject();
       threeObj.traverse((child) => {
         if (child instanceof Line2) {
+          child.visible = true;
           const material = child.material as LineMaterial;
           material.dashed = false;
           material.needsUpdate = true;
@@ -440,9 +462,7 @@ export class Uncreate extends Animation {
           child.computeLineDistances();
           this._totalLength = getLine2TotalLength(child);
 
-          material.dashSize = this._totalLength;
-          material.gapSize = 0;
-          material.needsUpdate = true;
+          setLine2RevealLength(child, this._totalLength, this._totalLength);
         }
       });
     }
@@ -453,11 +473,8 @@ export class Uncreate extends Animation {
       const threeObj = this.mobject.getThreeObject();
       threeObj.traverse((child) => {
         if (child instanceof Line2) {
-          const material = child.material as LineMaterial;
           const visibleLength = (1 - alpha) * this._totalLength;
-          material.dashSize = visibleLength;
-          material.gapSize = this._totalLength - visibleLength + 0.0001;
-          material.needsUpdate = true;
+          setLine2RevealLength(child, visibleLength, this._totalLength);
         }
       });
     } else {
@@ -470,10 +487,7 @@ export class Uncreate extends Animation {
       const threeObj = this.mobject.getThreeObject();
       threeObj.traverse((child) => {
         if (child instanceof Line2) {
-          const material = child.material as LineMaterial;
-          material.dashSize = 0;
-          material.gapSize = this._totalLength;
-          material.needsUpdate = true;
+          setLine2RevealLength(child, 0, this._totalLength);
         }
       });
     } else {
@@ -599,14 +613,7 @@ export class Write extends Animation {
           child.computeLineDistances();
           this._totalLength = getLine2TotalLength(child);
 
-          if (this._reverse) {
-            material.dashSize = this._totalLength;
-            material.gapSize = 0;
-          } else {
-            material.dashSize = 0;
-            material.gapSize = this._totalLength;
-          }
-          material.needsUpdate = true;
+          setLine2RevealLength(child, this._reverse ? this._totalLength : 0, this._totalLength);
         }
       });
     } else {
@@ -699,9 +706,7 @@ export class Write extends Animation {
             obj.computeLineDistances();
             skelTotalLen = getLine2TotalLength(obj);
 
-            material.dashSize = 0;
-            material.gapSize = skelTotalLen;
-            material.needsUpdate = true;
+            setLine2RevealLength(obj, 0, skelTotalLen);
           }
         });
 
@@ -724,9 +729,7 @@ export class Write extends Animation {
             totalLen = getLine2TotalLength(obj);
 
             // Start fully hidden
-            material.dashSize = 0;
-            material.gapSize = totalLen;
-            material.needsUpdate = true;
+            setLine2RevealLength(obj, 0, totalLen);
           }
         });
 
@@ -746,11 +749,8 @@ export class Write extends Animation {
       const threeObj = this.mobject.getThreeObject();
       threeObj.traverse((child) => {
         if (child instanceof Line2) {
-          const material = child.material as LineMaterial;
           const visibleLength = effectiveAlpha * this._totalLength;
-          material.dashSize = visibleLength;
-          material.gapSize = this._totalLength - visibleLength + 0.0001;
-          material.needsUpdate = true;
+          setLine2RevealLength(child, visibleLength, this._totalLength);
         }
       });
     } else {
@@ -795,11 +795,8 @@ export class Write extends Animation {
 
           skelThreeObj.traverse((obj) => {
             if (obj instanceof Line2) {
-              const material = obj.material as LineMaterial;
               const visibleLength = charAlpha * totalLen;
-              material.dashSize = visibleLength;
-              material.gapSize = totalLen - visibleLength + 0.0001;
-              material.needsUpdate = true;
+              setLine2RevealLength(obj, visibleLength, totalLen);
             }
           });
         } else {
@@ -810,11 +807,8 @@ export class Write extends Animation {
 
           childThreeObj.traverse((obj) => {
             if (obj instanceof Line2) {
-              const material = obj.material as LineMaterial;
               const visibleLength = charAlpha * totalLen;
-              material.dashSize = visibleLength;
-              material.gapSize = totalLen - visibleLength + 0.0001;
-              material.needsUpdate = true;
+              setLine2RevealLength(obj, visibleLength, totalLen);
             }
           });
         }
@@ -839,9 +833,8 @@ export class Write extends Animation {
 
           skelThreeObj.traverse((obj) => {
             if (obj instanceof Line2) {
+              setLine2RevealLength(obj, totalLen, totalLen);
               const material = obj.material as LineMaterial;
-              material.dashSize = totalLen;
-              material.gapSize = 0.0001;
               material.opacity = 1 - fadeAlpha;
               material.needsUpdate = true;
             }
@@ -854,9 +847,8 @@ export class Write extends Animation {
 
           childThreeObj.traverse((obj) => {
             if (obj instanceof Line2) {
+              setLine2RevealLength(obj, totalLen, totalLen);
               const material = obj.material as LineMaterial;
-              material.dashSize = totalLen;
-              material.gapSize = 0.0001;
               material.opacity = 1 - fadeAlpha;
               material.needsUpdate = true;
             }
@@ -897,10 +889,7 @@ export class Write extends Animation {
         const threeObj = this.mobject.getThreeObject();
         threeObj.traverse((child) => {
           if (child instanceof Line2) {
-            const material = child.material as LineMaterial;
-            material.dashSize = 0;
-            material.gapSize = this._totalLength;
-            material.needsUpdate = true;
+            setLine2RevealLength(child, 0, this._totalLength);
           }
         });
       }
@@ -910,6 +899,7 @@ export class Write extends Animation {
         const threeObj = this.mobject.getThreeObject();
         threeObj.traverse((child) => {
           if (child instanceof Line2) {
+            child.visible = true;
             const material = child.material as LineMaterial;
             material.dashed = false;
             material.needsUpdate = true;
@@ -974,6 +964,7 @@ export class Write extends Animation {
     for (const child of glyphGroup.children) {
       child.getThreeObject().traverse((obj) => {
         if (obj instanceof Line2) {
+          obj.visible = true;
           const material = obj.material as LineMaterial;
           material.dashed = false;
           material.needsUpdate = true;
