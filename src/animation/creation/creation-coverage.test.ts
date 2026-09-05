@@ -21,6 +21,7 @@ import { describe, it, expect } from 'vitest';
 import { Mobject } from '../../core/Mobject';
 import { VMobject } from '../../core/VMobject';
 import { PointMobject } from '../../mobjects/point';
+import { DashedLine } from '../../mobjects/geometry/DashedLine';
 import {
   Create,
   create,
@@ -796,7 +797,7 @@ describe('SpiralIn', () => {
 });
 
 // =============================================================================
-// Create _childAlpha via lagRatio
+// Create - lagRatio stagger (Animation.getSubAlpha, the ported get_sub_alpha)
 // =============================================================================
 
 describe('Create - lagRatio stagger', () => {
@@ -815,6 +816,104 @@ describe('Create - lagRatio stagger', () => {
     anim.interpolate(0.5);
     // Single mobject fallback: opacity-based
     expect(m.opacity).toBeCloseTo(0.5, 5);
+  });
+});
+
+describe('Create - default lagRatio is 1.0, matching Manim CE/3b1b (#544)', () => {
+  // getSubAlpha is `protected`; reach it the same way the rest of this file
+  // reaches other protected members (e.g. Write.lagRatio via `as any`).
+  function subAlpha(anim: Create, alpha: number, index: number, count: number, lagRatio: number) {
+    return (
+      anim as unknown as {
+        getSubAlpha: (a: number, i: number, c: number, l: number) => number;
+      }
+    ).getSubAlpha(alpha, index, count, lagRatio);
+  }
+
+  it('defaults to 1 (sequential) when no lagRatio option is given', () => {
+    const anim = new Create(new DashedLine());
+    expect((anim as unknown as { _lagRatio: number })._lagRatio).toBe(1);
+  });
+
+  it('exact #544 scenario: DashedLine, no explicit lagRatio, members do not all share one subAlpha', () => {
+    // Issue #544's own repro: `new Create(dashedLine, { duration: 1 })` — no
+    // lagRatio — expected the 11 dashes to draw one after another, not all
+    // simultaneously. Reproduced here via the public family/subAlpha surface
+    // rather than Line2.material.dashSize: Line2 never builds under this
+    // suite's happy-dom environment (see every other "VMobject without
+    // Line2" test in this file) — a pre-existing, unrelated limitation.
+    const dashed = new DashedLine({
+      start: [-3, 0, 0],
+      end: [3, 0, 0],
+      dashLength: 0.6,
+      dashRatio: 0.5,
+    });
+    const anim = new Create(dashed, { duration: 1 }); // no lagRatio — must use the default
+
+    const defaultLagRatio = (anim as unknown as { _lagRatio: number })._lagRatio;
+    expect(defaultLagRatio).toBe(1);
+
+    const family = dashed.familyMembersWithPoints();
+    expect(family.length).toBe(dashed.getDashes().length);
+    expect(family.length).toBeGreaterThan(1); // otherwise lagRatio can't matter
+
+    // Before #544's fix, every dash reached the same visibleFraction at every
+    // alpha (see the issue's own evidence table). With lagRatio=1 and real
+    // family members, they must NOT all get the same subAlpha mid-animation.
+    const subAlphas = family.map((_, i) => subAlpha(anim, 0.5, i, family.length, defaultLagRatio));
+    const distinct = new Set(subAlphas.map((v) => v.toFixed(6)));
+    expect(distinct.size).toBeGreaterThan(1);
+
+    // And it must be genuinely sequential: dash 0 finishes before dash 1
+    // starts moving (lagRatio=1 semantics), matching Manim's "each completes
+    // before the next begins".
+    expect(subAlpha(anim, 1 / family.length, 0, family.length, defaultLagRatio)).toBeCloseTo(1, 10);
+    expect(subAlpha(anim, 1 / family.length, 1, family.length, defaultLagRatio)).toBeCloseTo(0, 10);
+  });
+});
+
+describe('Animation.getSubAlpha (Manim CE get_sub_alpha formula)', () => {
+  // getSubAlpha is `protected` on Animation; Create is a concrete subclass we
+  // already construct everywhere else in this file, so reach it the same way
+  // the rest of the suite reaches other protected members (e.g. Write.lagRatio).
+  function subAlpha(anim: Create, alpha: number, index: number, count: number, lagRatio: number) {
+    return (
+      anim as unknown as {
+        getSubAlpha: (a: number, i: number, c: number, l: number) => number;
+      }
+    ).getSubAlpha(alpha, index, count, lagRatio);
+  }
+
+  it('returns alpha unchanged when lagRatio<=0 or a single member', () => {
+    const anim = new Create(new Mobject());
+    expect(subAlpha(anim, 0.42, 0, 1, 0.9)).toBeCloseTo(0.42, 10);
+    expect(subAlpha(anim, 0.42, 0, 5, 0)).toBeCloseTo(0.42, 10);
+  });
+
+  it('matches the documented 3-member, lagRatio=0.5 staircase', () => {
+    // member i's window is [0.25*i, 0.5 + 0.25*i] — see the lag-ratio audit.
+    const anim = new Create(new Mobject());
+    for (let i = 0; i < 3; i++) {
+      const start = 0.25 * i;
+      const end = 0.5 + 0.25 * i;
+      expect(subAlpha(anim, start, i, 3, 0.5)).toBeCloseTo(0, 10);
+      expect(subAlpha(anim, end, i, 3, 0.5)).toBeCloseTo(1, 10);
+      expect(subAlpha(anim, (start + end) / 2, i, 3, 0.5)).toBeCloseTo(0.5, 10);
+    }
+  });
+
+  it('clips outside its own window instead of going negative or past 1', () => {
+    const anim = new Create(new Mobject());
+    // member 2 of 3 (lagRatio=0.5) only starts moving at alpha=0.5
+    expect(subAlpha(anim, 0.1, 2, 3, 0.5)).toBe(0);
+    expect(subAlpha(anim, 1, 0, 3, 0.5)).toBe(1);
+  });
+});
+
+describe('VMobjectRendering.getOwnStrokeLines', () => {
+  it('returns an empty array for a VMobject with no points (no crash)', () => {
+    const v = new VMobject();
+    expect(v.getOwnStrokeLines()).toEqual([]);
   });
 });
 

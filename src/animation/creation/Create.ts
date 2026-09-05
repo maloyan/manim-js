@@ -64,6 +64,36 @@ export function getLine2TotalLength(child: Line2): number {
 }
 
 /**
+ * Reveal (or erase) a Line2's dashed stroke up to `visibleLength` out of
+ * `totalLen`. When nothing is revealed yet (or nothing remains), the line is
+ * hidden outright instead of being left at `dashSize=0`.
+ *
+ * Manim CE's partial-stroke reveal (pointwise_become_partial) has no
+ * unrevealed-tip artifact because the undrawn portion has no geometry at
+ * all. Three.js's LineMaterial dashed-line discard test degenerates at
+ * `dashSize=0` (see its own `// todo - FIX` comment at
+ * `three/examples/jsm/lines/LineMaterial.js`, in the fragment shader's
+ * `mod(vLineDistance + dashOffset, dashSize + gapSize) > dashSize` check) and
+ * leaves a stray fragment visible at the line's start anchor -- normally a
+ * single easy-to-miss frame on a solid shape, but glaring on something like
+ * DashedLine where a dozen independent Line2 dashes sit at `dashSize=0`
+ * simultaneously for most of the animation. Toggling `visible` sidesteps the
+ * shader edge case entirely, matching Manim CE's "doesn't exist yet"
+ * semantics.
+ */
+export function setLine2RevealLength(line: Line2, visibleLength: number, totalLen: number): void {
+  if (visibleLength <= 1e-9) {
+    line.visible = false;
+    return;
+  }
+  line.visible = true;
+  const material = line.material as LineMaterial;
+  material.dashSize = visibleLength;
+  material.gapSize = Math.max(0.0001, totalLen - visibleLength + 0.0001);
+  material.needsUpdate = true;
+}
+
+/**
  * Check whether a mobject's Three.js subtree contains at least one Line2 child.
  * Used by Create-family animations to decide between dash-based reveal and opacity fallback.
  */
@@ -76,7 +106,7 @@ export function hasLine2Children(mobject: Mobject): boolean {
 }
 
 export interface CreateOptions extends AnimationOptions {
-  /** Stagger ratio between submobjects (0 = simultaneous, higher = more stagger). Default: 0 */
+  /** Stagger ratio between submobjects (0 = simultaneous, 1 = fully sequential). Default: 1 (matches Manim CE/3b1b) */
   lagRatio?: number;
 }
 
@@ -89,17 +119,25 @@ export class Create extends Animation {
   private _originalFillOpacity: number = 0;
   /** Lag ratio for staggered submobject animation */
   private _lagRatio: number = 0;
-  /** Individual Line2 children for per-child stagger */
-  private _line2Children: Line2[] = [];
-  /** Per-Line2 total lengths */
-  private _line2TotalLengths: number[] = [];
+  /**
+   * Stagger unit: family members with points (Manim CE's
+   * family_members_with_points), NOT raw Line2 render primitives. A member
+   * with several internal subpaths stays one entry here.
+   */
+  private _family: VMobject[] = [];
+  /** Each family member's own Line2 segments (index-aligned with _family). */
+  private _memberLines: Line2[][] = [];
+  /** Each family member's per-segment total lengths (index-aligned with _memberLines). */
+  private _memberLineLengths: number[][] = [];
   /** Saved per-descendant opacities for proportional scaling (opacity fallback path) */
   private _savedOpacities: Array<[Mobject, number]> = [];
 
   constructor(mobject: Mobject, options: CreateOptions = {}) {
     // Manim default for Create is 2 seconds
     super(mobject, { duration: options.duration ?? 2, ...options });
-    this._lagRatio = options.lagRatio ?? 0;
+    // Manim CE / 3b1b default: lag_ratio=1.0 — submobjects draw sequentially,
+    // each completing before the next starts (#544).
+    this._lagRatio = options.lagRatio ?? 1;
   }
 
   /**
@@ -125,27 +163,33 @@ export class Create extends Animation {
         vmob.setFillOpacity(0);
       }
 
-      // Collect all Line2 children for per-child stagger support
-      this._line2Children = [];
-      this._line2TotalLengths = [];
-      const threeObj = this.mobject.getThreeObject();
-      threeObj.traverse((child) => {
-        if (child instanceof Line2) {
-          const material = child.material as LineMaterial;
+      // Stagger unit = family members with points (Manim CE semantics), not
+      // raw Line2 primitives — a member with multiple subpaths must not be
+      // split into multiple stagger units. Ensure the whole subtree is
+      // synced first so every member's rendering cache is up to date.
+      this.mobject.getThreeObject();
+      this._family = vmob.familyMembersWithPoints();
+      this._memberLines = [];
+      this._memberLineLengths = [];
+
+      for (const member of this._family) {
+        const lines = member.getOwnStrokeLines();
+        const lengths: number[] = [];
+        for (const line of lines) {
+          const material = line.material as LineMaterial;
           material.dashed = true;
           material.dashScale = 1;
 
-          child.computeLineDistances();
-          const totalLen = getLine2TotalLength(child);
-          this._line2Children.push(child);
-          this._line2TotalLengths.push(totalLen);
+          line.computeLineDistances();
+          const totalLen = getLine2TotalLength(line);
+          lengths.push(totalLen);
 
           // Start with nothing visible
-          material.dashSize = 0;
-          material.gapSize = totalLen;
-          material.needsUpdate = true;
+          setLine2RevealLength(line, 0, totalLen);
         }
-      });
+        this._memberLines.push(lines);
+        this._memberLineLengths.push(lengths);
+      }
     } else {
       // Non-line mobject (Text, etc.): use opacity
       // Save per-descendant opacities so children with different opacities
@@ -182,25 +226,33 @@ export class Create extends Animation {
   }
 
   /**
-   * Interpolate the dash size to progressively reveal the stroke.
-   * For filled VMobjects: first half draws border, second half fades in fill.
+   * Reveal one family member's own stroke segments up to `memberAlpha`,
+   * sweeping a cumulative-length front across its subpaths in order. This is
+   * the arc-length analogue of Manim CE's pointwise_become_partial: subpaths
+   * of a single VMobject share one window and draw in sequence, never
+   * staggered against each other.
    */
-  /**
-   * Compute per-child alpha with lag stagger.
-   * With lagRatio=0, all children animate together.
-   * With lagRatio>0, each child starts slightly after the previous.
-   */
-  private _childAlpha(alpha: number, childIndex: number, totalChildren: number): number {
-    if (this._lagRatio <= 0 || totalChildren <= 1) return alpha;
-    const fullLength = (totalChildren - 1) * this._lagRatio + 1;
-    const value = alpha * fullLength;
-    const lower = childIndex * this._lagRatio;
-    return Math.max(0, Math.min(1, value - lower));
+  private _revealMember(lines: Line2[], lengths: number[], memberAlpha: number): void {
+    const totalLength = lengths.reduce((sum, len) => sum + len, 0);
+    if (totalLength <= 0) return;
+    let remaining = memberAlpha * totalLength;
+    for (let i = 0; i < lines.length; i++) {
+      const totalLen = lengths[i];
+      const visibleLength = Math.max(0, Math.min(totalLen, remaining));
+      setLine2RevealLength(lines[i], visibleLength, totalLen);
+      remaining -= totalLen;
+    }
   }
 
+  /**
+   * Interpolate the dash size to progressively reveal the stroke.
+   * For filled VMobjects: first half draws border, second half fades in fill.
+   * Staggering (lagRatio) applies across family members (this._family), never
+   * across a single member's own subpaths.
+   */
   interpolate(alpha: number): void {
     if (this._useDashReveal) {
-      const n = this._line2Children.length;
+      const n = this._family.length;
 
       if (this._hasFill) {
         // Two-phase animation: border then fill (like Manim's DrawBorderThenFill)
@@ -209,37 +261,28 @@ export class Create extends Animation {
           vmob.setFillOpacity(0);
           const strokeAlpha = alpha * 2;
           for (let i = 0; i < n; i++) {
-            const cAlpha = this._childAlpha(strokeAlpha, i, n);
-            const totalLen = this._line2TotalLengths[i];
-            const material = this._line2Children[i].material as LineMaterial;
-            const visibleLength = cAlpha * totalLen;
-            material.dashSize = visibleLength;
-            material.gapSize = totalLen - visibleLength + 0.0001;
-            material.needsUpdate = true;
+            const subAlpha = this.getSubAlpha(strokeAlpha, i, n, this._lagRatio);
+            this._revealMember(this._memberLines[i], this._memberLineLengths[i], subAlpha);
           }
         } else {
           const fillAlpha = (alpha - 0.5) * 2;
           vmob.setFillOpacity(this._originalFillOpacity * fillAlpha);
           for (let i = 0; i < n; i++) {
-            const totalLen = this._line2TotalLengths[i];
-            const material = this._line2Children[i].material as LineMaterial;
-            if (material.dashed) {
-              material.dashSize = totalLen;
-              material.gapSize = 0.0001;
-              material.needsUpdate = true;
+            for (let j = 0; j < this._memberLines[i].length; j++) {
+              const totalLen = this._memberLineLengths[i][j];
+              const line = this._memberLines[i][j];
+              const material = line.material as LineMaterial;
+              if (material.dashed) {
+                setLine2RevealLength(line, totalLen, totalLen);
+              }
             }
           }
         }
       } else {
-        // No fill: stroke reveal with per-child stagger
+        // No fill: stroke reveal with per-family-member stagger
         for (let i = 0; i < n; i++) {
-          const cAlpha = this._childAlpha(alpha, i, n);
-          const totalLen = this._line2TotalLengths[i];
-          const material = this._line2Children[i].material as LineMaterial;
-          const visibleLength = cAlpha * totalLen;
-          material.dashSize = visibleLength;
-          material.gapSize = totalLen - visibleLength + 0.0001;
-          material.needsUpdate = true;
+          const subAlpha = this.getSubAlpha(alpha, i, n, this._lagRatio);
+          this._revealMember(this._memberLines[i], this._memberLineLengths[i], subAlpha);
         }
       }
     } else {
@@ -258,10 +301,13 @@ export class Create extends Animation {
       }
 
       // Disable dashing, show full stroke
-      for (const child of this._line2Children) {
-        const material = child.material as LineMaterial;
-        material.dashed = false;
-        material.needsUpdate = true;
+      for (const lines of this._memberLines) {
+        for (const line of lines) {
+          line.visible = true;
+          const material = line.material as LineMaterial;
+          material.dashed = false;
+          material.needsUpdate = true;
+        }
       }
     } else {
       this._applyScaledOpacities(1);
@@ -315,9 +361,7 @@ export class DrawBorderThenFill extends Animation {
           material.dashScale = 1;
           child.computeLineDistances();
           this._totalLength = getLine2TotalLength(child);
-          material.dashSize = 0;
-          material.gapSize = this._totalLength;
-          material.needsUpdate = true;
+          setLine2RevealLength(child, 0, this._totalLength);
         }
       });
     }
@@ -333,11 +377,8 @@ export class DrawBorderThenFill extends Animation {
         const threeObj = this.mobject.getThreeObject();
         threeObj.traverse((child) => {
           if (child instanceof Line2) {
-            const material = child.material as LineMaterial;
             const visibleLength = strokeAlpha * this._totalLength;
-            material.dashSize = visibleLength;
-            material.gapSize = this._totalLength - visibleLength + 0.0001;
-            material.needsUpdate = true;
+            setLine2RevealLength(child, visibleLength, this._totalLength);
           }
         });
       } else {
@@ -349,6 +390,7 @@ export class DrawBorderThenFill extends Animation {
         const threeObj = this.mobject.getThreeObject();
         threeObj.traverse((child) => {
           if (child instanceof Line2) {
+            child.visible = true;
             const material = child.material as LineMaterial;
             if (material.dashed) {
               material.dashed = false;
@@ -369,6 +411,7 @@ export class DrawBorderThenFill extends Animation {
       const threeObj = this.mobject.getThreeObject();
       threeObj.traverse((child) => {
         if (child instanceof Line2) {
+          child.visible = true;
           const material = child.material as LineMaterial;
           material.dashed = false;
           material.needsUpdate = true;
@@ -419,9 +462,7 @@ export class Uncreate extends Animation {
           child.computeLineDistances();
           this._totalLength = getLine2TotalLength(child);
 
-          material.dashSize = this._totalLength;
-          material.gapSize = 0;
-          material.needsUpdate = true;
+          setLine2RevealLength(child, this._totalLength, this._totalLength);
         }
       });
     }
@@ -432,11 +473,8 @@ export class Uncreate extends Animation {
       const threeObj = this.mobject.getThreeObject();
       threeObj.traverse((child) => {
         if (child instanceof Line2) {
-          const material = child.material as LineMaterial;
           const visibleLength = (1 - alpha) * this._totalLength;
-          material.dashSize = visibleLength;
-          material.gapSize = this._totalLength - visibleLength + 0.0001;
-          material.needsUpdate = true;
+          setLine2RevealLength(child, visibleLength, this._totalLength);
         }
       });
     } else {
@@ -449,10 +487,7 @@ export class Uncreate extends Animation {
       const threeObj = this.mobject.getThreeObject();
       threeObj.traverse((child) => {
         if (child instanceof Line2) {
-          const material = child.material as LineMaterial;
-          material.dashSize = 0;
-          material.gapSize = this._totalLength;
-          material.needsUpdate = true;
+          setLine2RevealLength(child, 0, this._totalLength);
         }
       });
     } else {
@@ -578,14 +613,7 @@ export class Write extends Animation {
           child.computeLineDistances();
           this._totalLength = getLine2TotalLength(child);
 
-          if (this._reverse) {
-            material.dashSize = this._totalLength;
-            material.gapSize = 0;
-          } else {
-            material.dashSize = 0;
-            material.gapSize = this._totalLength;
-          }
-          material.needsUpdate = true;
+          setLine2RevealLength(child, this._reverse ? this._totalLength : 0, this._totalLength);
         }
       });
     } else {
@@ -678,9 +706,7 @@ export class Write extends Animation {
             obj.computeLineDistances();
             skelTotalLen = getLine2TotalLength(obj);
 
-            material.dashSize = 0;
-            material.gapSize = skelTotalLen;
-            material.needsUpdate = true;
+            setLine2RevealLength(obj, 0, skelTotalLen);
           }
         });
 
@@ -703,9 +729,7 @@ export class Write extends Animation {
             totalLen = getLine2TotalLength(obj);
 
             // Start fully hidden
-            material.dashSize = 0;
-            material.gapSize = totalLen;
-            material.needsUpdate = true;
+            setLine2RevealLength(obj, 0, totalLen);
           }
         });
 
@@ -725,11 +749,8 @@ export class Write extends Animation {
       const threeObj = this.mobject.getThreeObject();
       threeObj.traverse((child) => {
         if (child instanceof Line2) {
-          const material = child.material as LineMaterial;
           const visibleLength = effectiveAlpha * this._totalLength;
-          material.dashSize = visibleLength;
-          material.gapSize = this._totalLength - visibleLength + 0.0001;
-          material.needsUpdate = true;
+          setLine2RevealLength(child, visibleLength, this._totalLength);
         }
       });
     } else {
@@ -774,11 +795,8 @@ export class Write extends Animation {
 
           skelThreeObj.traverse((obj) => {
             if (obj instanceof Line2) {
-              const material = obj.material as LineMaterial;
               const visibleLength = charAlpha * totalLen;
-              material.dashSize = visibleLength;
-              material.gapSize = totalLen - visibleLength + 0.0001;
-              material.needsUpdate = true;
+              setLine2RevealLength(obj, visibleLength, totalLen);
             }
           });
         } else {
@@ -789,11 +807,8 @@ export class Write extends Animation {
 
           childThreeObj.traverse((obj) => {
             if (obj instanceof Line2) {
-              const material = obj.material as LineMaterial;
               const visibleLength = charAlpha * totalLen;
-              material.dashSize = visibleLength;
-              material.gapSize = totalLen - visibleLength + 0.0001;
-              material.needsUpdate = true;
+              setLine2RevealLength(obj, visibleLength, totalLen);
             }
           });
         }
@@ -818,9 +833,8 @@ export class Write extends Animation {
 
           skelThreeObj.traverse((obj) => {
             if (obj instanceof Line2) {
+              setLine2RevealLength(obj, totalLen, totalLen);
               const material = obj.material as LineMaterial;
-              material.dashSize = totalLen;
-              material.gapSize = 0.0001;
               material.opacity = 1 - fadeAlpha;
               material.needsUpdate = true;
             }
@@ -833,9 +847,8 @@ export class Write extends Animation {
 
           childThreeObj.traverse((obj) => {
             if (obj instanceof Line2) {
+              setLine2RevealLength(obj, totalLen, totalLen);
               const material = obj.material as LineMaterial;
-              material.dashSize = totalLen;
-              material.gapSize = 0.0001;
               material.opacity = 1 - fadeAlpha;
               material.needsUpdate = true;
             }
@@ -876,10 +889,7 @@ export class Write extends Animation {
         const threeObj = this.mobject.getThreeObject();
         threeObj.traverse((child) => {
           if (child instanceof Line2) {
-            const material = child.material as LineMaterial;
-            material.dashSize = 0;
-            material.gapSize = this._totalLength;
-            material.needsUpdate = true;
+            setLine2RevealLength(child, 0, this._totalLength);
           }
         });
       }
@@ -889,6 +899,7 @@ export class Write extends Animation {
         const threeObj = this.mobject.getThreeObject();
         threeObj.traverse((child) => {
           if (child instanceof Line2) {
+            child.visible = true;
             const material = child.material as LineMaterial;
             material.dashed = false;
             material.needsUpdate = true;
@@ -953,6 +964,7 @@ export class Write extends Animation {
     for (const child of glyphGroup.children) {
       child.getThreeObject().traverse((obj) => {
         if (obj instanceof Line2) {
+          obj.visible = true;
           const material = obj.material as LineMaterial;
           material.dashed = false;
           material.needsUpdate = true;

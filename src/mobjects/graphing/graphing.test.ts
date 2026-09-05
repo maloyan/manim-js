@@ -379,6 +379,47 @@ describe('Axes', () => {
       expect(closeTo(pt0[0], -5)).toBe(true);
       expect(closeTo(pt10[0], 5)).toBe(true);
     });
+
+    it('coordsToPoint follows a rotated Axes, not the original orientation (#534)', () => {
+      const axes = new Axes({
+        xRange: [-8, 8, 1],
+        yRange: [-4, 4, 1],
+        xLength: 16,
+        yLength: 7,
+      });
+      axes.rotate(Math.PI / 6, { aboutPoint: [0, 0, 0] });
+
+      // coordsToPoint(1, 0) is one visual unit right of the axes' own origin,
+      // along its (now rotated) local x-axis — it must land on the rotated
+      // x-axis, not on the world x-axis where an unrotated Axes would put it.
+      const p = axes.coordsToPoint(1, 0);
+      const unitPerX = axes.getXLength() / (axes.xRange[1] - axes.xRange[0]);
+      const expectedX = Math.cos(Math.PI / 6) * unitPerX;
+      const expectedY = Math.sin(Math.PI / 6) * unitPerX;
+
+      expect(closeTo(p[0], expectedX)).toBe(true);
+      expect(closeTo(p[1], expectedY)).toBe(true);
+    });
+
+    it('pointToCoords inverts coordsToPoint on a rotated Axes (#534)', () => {
+      const axes = new Axes({ xRange: [-8, 8, 1], yRange: [-4, 4, 1], xLength: 16, yLength: 7 });
+      axes.rotate(Math.PI / 6, { aboutPoint: [0, 0, 0] });
+
+      const coords: [number, number] = [3, -1.5];
+      const point = axes.coordsToPoint(...coords);
+      const back = axes.pointToCoords(point);
+
+      expect(closeTo(back[0], coords[0])).toBe(true);
+      expect(closeTo(back[1], coords[1])).toBe(true);
+    });
+
+    it('coordsToPoint still accounts for a plain shift (no rotation)', () => {
+      const axes = new Axes({ xRange: [-5, 5, 1], yRange: [-3, 3, 1], xLength: 10, yLength: 6 });
+      axes.shift([2, 1, 0]);
+      const origin = axes.coordsToPoint(0, 0);
+      expect(closeTo(origin[0], 2)).toBe(true);
+      expect(closeTo(origin[1], 1)).toBe(true);
+    });
   });
 
   describe('xRange/yRange property accessors', () => {

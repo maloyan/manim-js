@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { VMobject } from './VMobject';
+import { VGroup } from './VGroup';
 import { Group } from './Group';
 import {
   getNumCurves,
@@ -1512,6 +1513,88 @@ describe('VMobject Mobject operations', () => {
     expect(family).toContain(c1);
     expect(family).toContain(c2);
     expect(family.length).toBe(3);
+  });
+
+  describe('familyMembersWithPoints (Manim CE stagger unit)', () => {
+    it('a lone VMobject with points is its own single family member', () => {
+      const v = new VMobject();
+      v.setPoints([
+        [0, 0, 0],
+        [1, 0, 0],
+      ]);
+      expect(v.familyMembersWithPoints()).toEqual([v]);
+    });
+
+    it('excludes containers that hold no points of their own (VGroup/DashedLine pattern)', () => {
+      const container = new VMobject(); // never given points: acts like a VGroup/DashedLine shell
+      const c1 = new VMobject();
+      c1.setPoints([
+        [0, 0, 0],
+        [1, 0, 0],
+      ]);
+      const c2 = new VMobject();
+      c2.setPoints([
+        [2, 0, 0],
+        [3, 0, 0],
+      ]);
+      container.add(c1, c2);
+      expect(container.familyMembersWithPoints()).toEqual([c1, c2]);
+    });
+
+    it('a VMobject with multiple internal subpaths is still exactly ONE stagger unit', () => {
+      // Regression for the Create lagRatio bug: subpaths of a single VMobject
+      // (e.g. a glyph with a hole) must never be counted as separate family
+      // members, no matter how many subpaths setBaseSubpathLengths declares.
+      const v = new VMobject();
+      v.setPoints([
+        [0, 0, 0],
+        [0.3, 0, 0],
+        [0.7, 0, 0],
+        [1, 0, 0],
+        [2, 0, 0],
+        [2.3, 0, 0],
+        [2.7, 0, 0],
+        [3, 0, 0],
+      ]);
+      v.setBaseSubpathLengths([4, 4]); // 2 subpaths, 1 mobject
+      expect(v.familyMembersWithPoints()).toEqual([v]);
+    });
+
+    it('excludes a real VGroup container itself, despite VGroup.getLocalPoints() aggregating children', () => {
+      // Regression: VGroup overrides getLocalPoints() to aggregate its
+      // children's points (for Homotopy/ApplyWave-style transforms), which
+      // must NOT make the VGroup itself look like a stagger unit with its
+      // own points. Caught by real-browser validation of bug #544's fix.
+      const c1 = new VMobject();
+      c1.setPoints([
+        [0, 0, 0],
+        [1, 0, 0],
+      ]);
+      const c2 = new VMobject();
+      c2.setPoints([
+        [2, 0, 0],
+        [3, 0, 0],
+      ]);
+      const group = new VGroup(c1, c2);
+      expect(group.getLocalPoints().length).toBeGreaterThan(0); // the aggregation itself
+      expect(group.familyMembersWithPoints()).toEqual([c1, c2]); // but NOT counted as a member
+    });
+
+    it('does not include descendants once a subpath-bearing container has children too', () => {
+      // Sanity check: the filter is per-node (getLocalPoints), not "has no children".
+      const v = new VMobject();
+      v.setPoints([
+        [0, 0, 0],
+        [1, 0, 0],
+      ]);
+      const child = new VMobject();
+      child.setPoints([
+        [2, 0, 0],
+        [3, 0, 0],
+      ]);
+      v.add(child);
+      expect(v.familyMembersWithPoints()).toEqual([v, child]);
+    });
   });
 
   it('generateTarget creates independent copy', () => {

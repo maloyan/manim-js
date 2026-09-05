@@ -16,8 +16,12 @@ import { TexturedMobject } from '../core/TexturedMobject';
 import { VMobject } from '../core/VMobject';
 import { VGroup } from '../core/VGroup';
 import { Circle } from '../mobjects/geometry/Circle';
+import { DashedLine } from '../mobjects/geometry/DashedLine';
+import { RegularPolygram } from '../mobjects/geometry/PolygonExtensions';
 import { PMobject } from '../mobjects/point/PMobject';
 import { PointCloudMorphStrategy } from './transform/PointCloudMorphStrategy';
+import { PointMorphStrategy } from './transform/PointMorphStrategy';
+import { FadeMorphStrategy } from './transform/FadeMorphStrategy';
 import { ImageMobject } from '../mobjects/image';
 import { Text } from '../mobjects/text/Text';
 import { MathTex } from '../mobjects/text/MathTex';
@@ -1159,7 +1163,7 @@ describe('Transform on VGroup (#206)', () => {
     }).not.toThrow();
   });
 
-  it('fades in extra target children when target has more', () => {
+  it('splits an existing child into a real duplicate when target has more (Manim CE add_n_more_submobjects)', () => {
     const c1 = new Circle({ radius: 1 });
     const group = new VGroup(c1);
 
@@ -1171,20 +1175,24 @@ describe('Transform on VGroup (#206)', () => {
     const t = new Transform(group, target);
     t.begin();
 
-    // Source group should now have a placeholder child for the extra target
+    // Source group should now have a real duplicate of c1 for the extra target.
     expect(group.children.length).toBe(2);
+    const duplicate = group.children[1] as VMobject;
+    expect(duplicate).not.toBe(c1);
 
-    // At alpha=0, placeholder should be invisible
+    // The duplicate starts as a full, visible copy of its sibling (c1's
+    // radius-1 geometry) -- never an invisible placeholder.
     t.interpolate(0);
-    const placeholder = group.children[1] as VMobject;
-    expect(placeholder.opacity).toBeCloseTo(0, 5);
+    expect(duplicate.opacity).toBeCloseTo(c1.opacity, 5);
+    expect(duplicate.getBoundingBox().width).toBeCloseTo(2, 3); // radius-1 circle
 
-    // At alpha=1, placeholder should be visible
+    // By alpha=1 it has morphed for real into tc2's shape/position.
     t.interpolate(1);
-    expect(placeholder.opacity).toBeCloseTo(tc2.opacity, 5);
+    expect(duplicate.getBoundingBox().width).toBeCloseTo(1, 3); // radius-0.5 circle
+    expect(duplicate.getCenter()[0]).toBeCloseTo(2, 3);
   });
 
-  it('fades out extra source children when source has more', () => {
+  it('merges an extra source child into a duplicated target when source has more (Manim CE add_n_more_submobjects)', () => {
     const c1 = new Circle({ radius: 1 });
     const c2 = new Circle({ radius: 0.5 });
     const group = new VGroup(c1, c2);
@@ -1196,9 +1204,12 @@ describe('Transform on VGroup (#206)', () => {
     t.begin();
     t.interpolate(1);
 
-    // Extra source child should be faded to invisible
-    expect(c2.opacity).toBeCloseTo(0, 5);
-    expect(c2.fillOpacity).toBeCloseTo(0, 5);
+    // Extra source child morphs for real into a duplicate of tc1 (Manim CE's
+    // "merging" behavior) instead of fading to invisible.
+    expect(c2.opacity).toBeCloseTo(tc1.opacity, 5);
+    expect(c2.fillOpacity).toBeCloseTo(tc1.fillOpacity, 5);
+    expect(c2.getBoundingBox().width).toBeCloseTo(4, 3); // radius-2 circle
+    expect(c2.getCenter()[0]).toBeCloseTo(tc1.getCenter()[0], 3);
   });
 
   it('interpolate at alpha=0 preserves start state', () => {
@@ -1289,6 +1300,95 @@ describe('Transform on VGroup (#206)', () => {
 
       expect(centerB[0]).not.toBeCloseTo(centerC[0], 5);
       expect(centerB[1]).not.toBeCloseTo(centerC[1], 5);
+    });
+  });
+});
+
+describe('Transform on non-VGroup leaf-delegating VMobjects (issue #545)', () => {
+  // Regression for: Transform silently fell back to FadeMorphStrategy for any
+  // VMobject whose geometry is carried entirely by its children (own points
+  // cleared) unless that VMobject also happened to be a VGroup. DashedLine
+  // and a multi-component RegularPolygram both hit this — neither is a
+  // VGroup, and neither has non-empty getLocalPoints() on itself.
+
+  describe('DashedLine (own points empty, geometry in Line children)', () => {
+    it('is not itself a VGroup, and owns no points directly', () => {
+      const dashed = new DashedLine({ start: [-1, 0, 0], end: [1, 0, 0], dashLength: 0.2 });
+      expect(dashed).not.toBeInstanceOf(VGroup);
+      expect(dashed.hasOwnPoints()).toBe(false);
+      expect(dashed.getLocalPoints()).toEqual([]);
+      expect(dashed.getDashes().length).toBeGreaterThan(0);
+    });
+
+    it('selects PointMorphStrategy, not FadeMorphStrategy', () => {
+      const source = new DashedLine({ start: [-1, 0, 0], end: [1, 0, 0], dashLength: 0.2 });
+      const target = new DashedLine({ start: [-2, 1, 0], end: [2, 1, 0], dashLength: 0.2 });
+
+      const t = new Transform(source, target);
+      t.begin();
+
+      const strategy = (t as unknown as { _strategy: unknown })._strategy;
+      expect(strategy).toBeInstanceOf(PointMorphStrategy);
+      expect(strategy).not.toBeInstanceOf(FadeMorphStrategy);
+    });
+
+    it('interpolates each dash geometrically instead of cross-fading the whole line', () => {
+      const source = new DashedLine({ start: [-1, 0, 0], end: [1, 0, 0], dashLength: 0.2 });
+      const target = new DashedLine({ start: [-1, 4, 0], end: [1, 4, 0], dashLength: 0.2 });
+
+      const firstDashStartY = source.getDashes()[0].getLocalPoints()[0][1];
+      expect(firstDashStartY).toBeCloseTo(0, 5);
+
+      const t = new Transform(source, target);
+      t.begin();
+
+      // A real geometric morph moves each dash continuously; a cross-fade
+      // would leave positions untouched and only animate opacity.
+      t.interpolate(0.5);
+      const midY = source.getDashes()[0].getLocalPoints()[0][1];
+      expect(midY).toBeCloseTo(2, 1);
+      expect(source.getDashes()[0].opacity).toBeCloseTo(1, 5);
+
+      t.interpolate(1);
+      t.finish();
+      const finalY = source.getDashes()[0].getLocalPoints()[0][1];
+      expect(finalY).toBeCloseTo(4, 1);
+    });
+
+    it('handles a source/target pair with a different number of dashes without throwing', () => {
+      const source = new DashedLine({ start: [-1, 0, 0], end: [1, 0, 0], dashLength: 0.5 });
+      const target = new DashedLine({ start: [-1, 0, 0], end: [1, 0, 0], dashLength: 0.1 });
+      expect(source.getDashes().length).not.toBe(target.getDashes().length);
+
+      const t = new Transform(source, target);
+      expect(() => {
+        t.begin();
+        t.interpolate(0.5);
+        t.interpolate(1);
+        t.finish();
+      }).not.toThrow();
+    });
+  });
+
+  describe('RegularPolygram with gcd(n,k) > 1 (own points empty, geometry in VMobject children)', () => {
+    it('is not a VGroup, and owns no points directly once it has multiple components', () => {
+      // {6/2} decomposes into gcd(6,2)=2 triangle components, stored as children.
+      const hexagram = new RegularPolygram({ numVertices: 6, density: 2 });
+      expect(hexagram).not.toBeInstanceOf(VGroup);
+      expect(hexagram.hasOwnPoints()).toBe(false);
+      expect(hexagram.children.length).toBe(2);
+    });
+
+    it('selects PointMorphStrategy, not FadeMorphStrategy, for two multi-component polygrams', () => {
+      const source = new RegularPolygram({ numVertices: 6, density: 2, radius: 1 });
+      const target = new RegularPolygram({ numVertices: 6, density: 2, radius: 2 });
+
+      const t = new Transform(source, target);
+      t.begin();
+
+      const strategy = (t as unknown as { _strategy: unknown })._strategy;
+      expect(strategy).toBeInstanceOf(PointMorphStrategy);
+      expect(strategy).not.toBeInstanceOf(FadeMorphStrategy);
     });
   });
 });

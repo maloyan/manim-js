@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { VMobject } from './VMobject';
-import { VGroup } from './VGroup';
 
 /**
  * Leaf VMobject plus effective (world) transform data.
@@ -31,6 +30,13 @@ function composeLocalMatrix(node: VMobject): THREE.Matrix4 {
  *
  * This is useful when animation logic needs to reason about nested transforms
  * in Group/VGroup trees while still applying updates on leaf VMobjects.
+ *
+ * A node is treated as a container to descend into (rather than a leaf)
+ * whenever it owns no geometry itself (`!node.hasOwnPoints()`) — not only
+ * for VGroup, but for any VMobject subclass that clears its own points and
+ * delegates entirely to VMobject children (DashedLine, a multi-component
+ * RegularPolygram, ...). A node that owns points itself is always a leaf,
+ * even if it also happens to have children.
  */
 export function collectLeafVMobjectSnapshots(root: VMobject): LeafVMobjectSnapshot[] {
   const snapshots: LeafVMobjectSnapshot[] = [];
@@ -47,7 +53,7 @@ export function collectLeafVMobjectSnapshots(root: VMobject): LeafVMobjectSnapsh
     const localMatrix = composeLocalMatrix(node);
     const worldMatrix = new THREE.Matrix4().multiplyMatrices(parentWorldMatrix, localMatrix);
 
-    if (node instanceof VGroup) {
+    if (!node.hasOwnPoints()) {
       // Reverse push to preserve left-to-right traversal order
       for (let i = node.children.length - 1; i >= 0; i--) {
         const child = node.children[i];

@@ -183,6 +183,23 @@ export abstract class VMobjectRendering extends Mobject {
   }
 
   /**
+   * This VMobject's own stroke Line2 primitives (one per subpath), synced on
+   * demand. Scoped strictly to this instance's rendering cache — never
+   * includes descendants' primitives. Lets callers (e.g. Create's lagRatio
+   * stagger) drive exactly one mobject's own segments without walking the
+   * Three.js scene graph, which cannot distinguish "another family member"
+   * from "another subpath of this same member".
+   *
+   * `_cachedLine2`/`_cachedLine2Array` stay private and mutable internally
+   * (which cache is active is an implementation detail); this returns a
+   * fresh array so callers cannot corrupt that internal state.
+   */
+  getOwnStrokeLines(): Line2[] {
+    this.getThreeObject(); // ensure this node's own geometry is synced (cheap no-op if already clean)
+    return this._cachedLine2 ? [this._cachedLine2] : [...this._cachedLine2Array];
+  }
+
+  /**
    * VMobject-level upward dirty propagation must also mark geometry dirty.
    * This keeps geometry invalidation centralized for point/curve mutations.
    */

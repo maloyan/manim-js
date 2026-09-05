@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { VMobject } from '../../core/VMobject';
-import { VGroup } from '../../core/VGroup';
 import { Mobject } from '../../core/Mobject';
 import { Animation } from '../Animation';
 import { lerpPoint } from '../../utils/math';
@@ -8,6 +7,7 @@ import { worldToParentLocalPosition } from '../../core/MobjectTraversal';
 import {
   alignVmobjectPair,
   canMorphByPoints,
+  needsLeafPairing,
   pairLeafSnapshotsByIndex,
   type LeafPairByIndex,
 } from './TransformPairing';
@@ -89,7 +89,11 @@ export class PointMorphStrategy implements MorphStrategy {
   begin(_animation: Animation, source: Mobject, target: Mobject): void {
     if (!(source instanceof VMobject) || !(target instanceof VMobject))
       throw new Error('PointMorphStrategy requires VMobject inputs');
-    if (source instanceof VGroup && target instanceof VGroup) {
+    // Either a real VGroup, or any other VMobject (DashedLine, a
+    // multi-component RegularPolygram, ...) that owns no points itself and
+    // delegates entirely to VMobject children: pair those up leaf-by-leaf
+    // instead of trying to align two empty point lists.
+    if (needsLeafPairing(source) && needsLeafPairing(target)) {
       this._beginVGroup(source, target);
       return;
     }
@@ -123,6 +127,12 @@ export class PointMorphStrategy implements MorphStrategy {
     source.setTransformSubpathLengths(this._alignedSubpathLengths);
   }
   /**
+   * Leaf-by-leaf morph for any VMobject pair that delegates its geometry to
+   * VMobject children — a real VGroup, or a plain VMobject subclass like
+   * DashedLine or a multi-component RegularPolygram that clears its own
+   * points and renders via children. Named `_beginVGroup` for its original
+   * (VGroup-only) scope; the logic itself is not VGroup-specific.
+   *
    * @pre  source and target each contain ≥ 1 leaf VMobject.
    * @side-effect source.normalizeTransform() is called in place:
    *              world-space geometry is unchanged, but local points are recentered
@@ -131,10 +141,10 @@ export class PointMorphStrategy implements MorphStrategy {
    *       target leaf (or a faded placeholder), with positions expressed in
    *       source's parent-local coordinate system.
    */
-  private _beginVGroup(source: VGroup, target: VGroup): void {
+  private _beginVGroup(source: VMobject, target: VMobject): void {
     this._isVGroupTransform = true;
     source.normalizeTransform();
-    const normalizedTarget = target.copy() as VGroup;
+    const normalizedTarget = target.copy() as VMobject;
     normalizedTarget.normalizeTransform();
     for (const pair of pairLeafSnapshotsByIndex(source, normalizedTarget))
       this._vgroupLeafStates.push(this._build(source, pair));
@@ -146,15 +156,29 @@ export class PointMorphStrategy implements MorphStrategy {
     this._startScale.copy(source.scaleVector);
     this._targetScale.copy(normalizedTarget.scaleVector);
   }
-  private _build(group: VGroup, pair: LeafPairByIndex): VGroupLeafState {
-    const { source: src, target: tgt, sourceIsPlaceholder, targetIsPlaceholder } = pair;
+  private _build(group: VMobject, pair: LeafPairByIndex): VGroupLeafState {
+    const {
+      source: src,
+      target: tgt,
+      sourceIsPlaceholder,
+      targetIsPlaceholder,
+      sourceIsNew,
+    } = pair;
     const sc = src.leaf;
     const tc = tgt.leaf;
     let child: VMobject = sc;
     if (sourceIsPlaceholder) {
+      // Blank filler (only when the source family had zero leaves at all):
+      // start as an invisible copy of the target, fading in in place.
       child = tc.copy() as VMobject;
       child.opacity = 0;
       child.fillOpacity = 0;
+      group.add(child);
+    } else if (sourceIsNew) {
+      // A real duplicate of an existing sibling (Manim CE's
+      // add_n_more_submobjects): already a full, visible VMobject with its
+      // own geometry/style -- just needs to join the scene graph so it can
+      // morph for real toward its own paired target leaf.
       group.add(child);
     }
     const canMorph = canMorphByPoints(sc, tc) && !sourceIsPlaceholder && !targetIsPlaceholder;
@@ -272,7 +296,7 @@ export class PointMorphStrategy implements MorphStrategy {
    */
   finish(_animation: Animation, source: Mobject, target: Mobject): void {
     if (this._isVGroupTransform) {
-      const group = source as VGroup;
+      const group = source as VMobject;
       // leaf.targetPosition is in source-local space: P_target - P_source + target_child.localPos.
       // Re-express in target-local space by subtracting (P_target - P_source).
       const posOffset = new THREE.Vector3().subVectors(this._targetPosition, this._startPosition);

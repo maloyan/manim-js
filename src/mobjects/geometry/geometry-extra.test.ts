@@ -7,6 +7,7 @@ import { CubicBezier } from './CubicBezier';
 import { Circle } from './Circle';
 import { Dot, SmallDot, LargeDot } from './Dot';
 import { Line } from './Line';
+import { RegularPolygram } from './PolygonExtensions';
 import { BLUE, WHITE } from '../../constants';
 
 // ---------------------------------------------------------------------------
@@ -144,12 +145,20 @@ describe('DashedLine', () => {
 
   it('produces dashes for a line of length 1 with default options', () => {
     const dl = new DashedLine();
-    // total length=1, dashLength=0.1, dashRatio=0.5
-    // dash=0.05, gap=0.05, cycle=0.1 => 10 full cycles
-    // The loop starts at 0 and adds a dash whenever currentPos < totalLength,
-    // which includes one extra partial-cycle at position 1.0.
+    // total length=1, dashLength=0.1, dashRatio=0.5 => dash=0.05, gap=0.05,
+    // cycle=0.1 => exactly 10 full cycles, no remainder, so exactly 10
+    // dashes (regression: this used to be 11 due to floating-point drift in
+    // the old accumulated `currentPos += cycleLen` loop producing a spurious
+    // 11th near-zero-length dash at the very end).
     const dashes = dl.getDashes();
-    expect(dashes.length).toBe(11);
+    expect(dashes.length).toBe(10);
+    const last = dashes[dashes.length - 1].getLocalPoints();
+    const lastLen = Math.hypot(
+      last[last.length - 1][0] - last[0][0],
+      last[last.length - 1][1] - last[0][1],
+      last[last.length - 1][2] - last[0][2],
+    );
+    expect(lastLen).toBeCloseTo(0.05, 5); // a real dash, not a degenerate sliver
   });
 
   it('getLength returns line length', () => {
@@ -184,6 +193,96 @@ describe('DashedLine', () => {
   it('handles degenerate (zero-length) line', () => {
     const dl = new DashedLine({ start: [1, 1, 0], end: [1, 1, 0] });
     expect(dl.getDashes().length).toBe(0);
+  });
+
+  describe('deterministic dash count (regression: floating-point extra-dash bug)', () => {
+    function dashLengths(dl: DashedLine): number[] {
+      return dl.getDashes().map((d) => {
+        const pts = d.getLocalPoints();
+        const a = pts[0];
+        const b = pts[pts.length - 1];
+        return Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+      });
+    }
+
+    it('length exactly a multiple of the cycle produces no spurious extra dash', () => {
+      // The original repro: 6 / 0.3 = 20 full cycles exactly -- the old
+      // accumulated-addition loop produced a spurious 21st, near-zero dash.
+      const dl = new DashedLine({ start: [-3, 0, 0], end: [3, 0, 0], dashLength: 0.3 });
+      expect(dl.getDashes().length).toBe(20);
+      for (const len of dashLengths(dl)) {
+        expect(len).toBeCloseTo(0.15, 6); // every dash is a real, full-length dash
+      }
+    });
+
+    it('length exactly a multiple of a different cycle (0.1) also produces no spurious extra dash', () => {
+      const dl = new DashedLine({ start: [0, 0, 0], end: [6, 0, 0], dashLength: 0.1 });
+      expect(dl.getDashes().length).toBe(60);
+      for (const len of dashLengths(dl)) {
+        expect(len).toBeCloseTo(0.05, 6);
+      }
+    });
+
+    it('length with a genuine remainder produces one real (non-degenerate) final partial dash', () => {
+      const dl = new DashedLine({ start: [0, 0, 0], end: [4, 0, 0], dashLength: 0.3 });
+      // 4 / 0.3 = 13 full cycles (3.9) + remainder 0.1 -- the last dash is
+      // shorter than a full dash (0.15) but still a real, visible segment.
+      const dashes = dl.getDashes();
+      expect(dashes.length).toBe(14);
+      const lens = dashLengths(dl);
+      for (const len of lens.slice(0, -1)) expect(len).toBeCloseTo(0.15, 6);
+      expect(lens[lens.length - 1]).toBeCloseTo(0.1, 6);
+      expect(lens[lens.length - 1]).toBeGreaterThan(1e-6); // not a degenerate sliver
+    });
+
+    it('different dashLength values each produce the mathematically expected count', () => {
+      const cases: Array<{ length: number; dashLength: number; expected: number }> = [
+        { length: 10, dashLength: 0.5, expected: 20 }, // exact multiple
+        { length: 3, dashLength: 0.2, expected: 15 }, // exact multiple
+        { length: 5, dashLength: 0.3, expected: 17 }, // remainder
+        { length: 4, dashLength: 0.25, expected: 16 }, // exact multiple
+      ];
+      for (const c of cases) {
+        const dl = new DashedLine({
+          start: [0, 0, 0],
+          end: [c.length, 0, 0],
+          dashLength: c.dashLength,
+        });
+        expect(dl.getDashes().length).toBe(c.expected);
+      }
+    });
+
+    it('different dashRatio values do not change the dash count, only dash/gap proportions', () => {
+      for (const dashRatio of [0.1, 0.3, 0.5, 0.7, 0.9]) {
+        const dl = new DashedLine({ start: [0, 0, 0], end: [6, 0, 0], dashLength: 0.3, dashRatio });
+        expect(dl.getDashes().length).toBe(20);
+        const lens = dashLengths(dl);
+        for (const len of lens) expect(len).toBeCloseTo(0.3 * dashRatio, 6);
+      }
+    });
+
+    it('very small total length relative to dashLength still produces a correct, small dash count', () => {
+      const dl = new DashedLine({ start: [0, 0, 0], end: [0.05, 0, 0], dashLength: 0.3 });
+      // 0.05 < dashLen (0.15) -- a single truncated dash covering the whole line.
+      expect(dl.getDashes().length).toBe(1);
+      expect(dashLengths(dl)[0]).toBeCloseTo(0.05, 6);
+    });
+
+    it('very small dashLength relative to length still produces the correct (large) count, no infinite loop', () => {
+      const dl = new DashedLine({ start: [0, 0, 0], end: [1, 0, 0], dashLength: 0.01 });
+      expect(dl.getDashes().length).toBe(100);
+    });
+
+    it('dashLength effectively zero produces zero dashes instead of hanging or throwing', () => {
+      const dl = new DashedLine({ start: [0, 0, 0], end: [3, 0, 0], dashLength: 0 });
+      expect(dl.getDashes().length).toBe(0);
+      expect(dl.getLocalPoints()).toEqual([]);
+    });
+
+    it('zero-length line (start === end) still produces zero dashes with a non-zero dashLength', () => {
+      const dl = new DashedLine({ start: [2, 2, 0], end: [2, 2, 0], dashLength: 0.3 });
+      expect(dl.getDashes().length).toBe(0);
+    });
   });
 });
 
@@ -863,6 +962,11 @@ describe('DashedLine - propagation and copy', () => {
     expect(c.getDashRatio()).toBe(0.7);
     expect(c.color).toBe('#123456');
     expect(c.strokeWidth).toBe(6);
+    // The constructor already rebuilds dashes from the copied endpoint
+    // params -- _copyBaseAttributesInto must not ALSO copy the original's
+    // children on top, or the clone ends up with double the dashes.
+    expect(c.children.length).toBe(dl.children.length);
+    expect(c.getDashes().length).toBe(dl.getDashes().length);
     // Mutating the copy does not affect original
     c.setStart([99, 0, 0]);
     expect(dl.getStart()).toEqual([1, 0, 0]);
@@ -872,5 +976,85 @@ describe('DashedLine - propagation and copy', () => {
     const dl = new DashedLine({ start: [0, 0, 0], end: [3, 0, 0] });
     const c = dl.copy() as DashedLine;
     expect(c.getDashes().length).toBeGreaterThan(0);
+  });
+
+  describe('copy() does not duplicate children (regression)', () => {
+    it('children count matches exactly, before and after, for several dashLength/dashRatio combinations', () => {
+      const cases = [
+        { start: [-3, 0, 0] as const, end: [3, 0, 0] as const, dashLength: 0.3, dashRatio: 0.5 },
+        { start: [-2, 1, 0] as const, end: [2, -1, 0] as const, dashLength: 0.12, dashRatio: 0.3 },
+        { start: [0, 0, 0] as const, end: [1, 0, 0] as const, dashLength: 0.25, dashRatio: 0.9 },
+      ];
+      for (const c of cases) {
+        const dl = new DashedLine(c);
+        const before = dl.children.length;
+        expect(before).toBeGreaterThan(0);
+
+        const clone = dl.copy() as DashedLine;
+
+        // The exact bug this guards: _copyBaseAttributesInto's default
+        // copyChildren=true would re-add the original's (copied) children on
+        // top of the ones the DashedLine constructor already rebuilt from
+        // start/end/dashLength/dashRatio, doubling the count.
+        expect(clone.children.length).toBe(before);
+        expect(clone.getDashes().length).toBe(dl.getDashes().length);
+        expect((clone as unknown as { _dashes: unknown[] })._dashes.length).toBe(
+          clone.children.length,
+        );
+      }
+    });
+
+    it('clone geometry is point-for-point identical to the original, dash by dash', () => {
+      const dl = new DashedLine({
+        start: [-2, 1, 0],
+        end: [3, -1, 0],
+        dashLength: 0.2,
+        dashRatio: 0.6,
+      });
+      const clone = dl.copy() as DashedLine;
+
+      const originalDashes = dl.getDashes();
+      const clonedDashes = clone.getDashes();
+      expect(clonedDashes.length).toBe(originalDashes.length);
+      for (let i = 0; i < originalDashes.length; i++) {
+        expect(clonedDashes[i].getLocalPoints()).toEqual(originalDashes[i].getLocalPoints());
+      }
+    });
+
+    it('preserves start/end/dashLength/dashRatio/color/strokeWidth exactly', () => {
+      const dl = new DashedLine({
+        start: [1, 2, 0],
+        end: [-4, 5, 0],
+        dashLength: 0.17,
+        dashRatio: 0.42,
+        color: '#abcdef',
+        strokeWidth: 9,
+      });
+      const clone = dl.copy() as DashedLine;
+
+      expect(clone.getStart()).toEqual(dl.getStart());
+      expect(clone.getEnd()).toEqual(dl.getEnd());
+      expect(clone.getDashLength()).toBe(dl.getDashLength());
+      expect(clone.getDashRatio()).toBe(dl.getDashRatio());
+      expect(clone.color).toBe(dl.color);
+      expect(clone.strokeWidth).toBe(dl.strokeWidth);
+
+      // Mutating a copied parameter regenerates the clone's own dashes
+      // correctly, independent of the original (constructor-rebuild path
+      // still works after the copyChildren:false change).
+      clone.setDashLength(0.5);
+      expect(clone.getDashLength()).toBe(0.5);
+      expect(dl.getDashLength()).toBe(0.17);
+      expect(clone.getDashes().length).toBeGreaterThan(0);
+    });
+
+    it('does not regress RegularPolygram, the sibling self-rebuilding composite that already used copyChildren:false', () => {
+      const poly = new RegularPolygram({ numVertices: 6, density: 2, radius: 1.5 });
+      const before = poly.children.length;
+      expect(before).toBe(2); // gcd(6,2)=2 components
+
+      const clone = poly.copy();
+      expect(clone.children.length).toBe(before);
+    });
   });
 });

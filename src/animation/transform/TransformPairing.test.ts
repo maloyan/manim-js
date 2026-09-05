@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { VMobject } from '../../core/VMobject';
 import { VGroup } from '../../core/VGroup';
 import { Circle } from '../../mobjects/geometry/Circle';
-import { alignVmobjectPair, pairLeafSnapshotsByIndex } from './TransformPairing';
+import { DashedLine } from '../../mobjects/geometry/DashedLine';
+import { alignVmobjectPair, needsLeafPairing, pairLeafSnapshotsByIndex } from './TransformPairing';
 import { alignCompoundPathsForTransform } from '../../core/VMobjectTransformAlignment';
 
 function vmWithPoints(pts: number[][]) {
@@ -321,7 +322,7 @@ describe('TransformPairing core', () => {
     expect(aligned.targetPoints[0][1]).toBeCloseTo(-1, 6);
   });
 
-  it('pairLeafSnapshotsByIndex preserves left-to-right leaf order and unmatched tails', () => {
+  it('pairLeafSnapshotsByIndex preserves left-to-right leaf order and pads the shorter side by duplication', () => {
     const a = new Circle({ radius: 1 });
     const b = new Circle({ radius: 0.8 });
     const c = new Circle({ radius: 0.6 });
@@ -338,15 +339,63 @@ describe('TransformPairing core', () => {
     expect(pairs[0].target.leaf).toBe(t0);
     expect(pairs[0].sourceIsPlaceholder).toBe(false);
     expect(pairs[0].targetIsPlaceholder).toBe(false);
+    expect(pairs[0].sourceIsNew).toBe(false);
 
+    // b and c pair with real duplicates of t0 (Manim CE
+    // add_n_more_submobjects), never with blank invisible placeholders.
     expect(pairs[1].source.leaf).toBe(b);
     expect(pairs[1].sourceIsPlaceholder).toBe(false);
-    expect(pairs[1].targetIsPlaceholder).toBe(true);
-    expect(pairs[1].target.leaf.getLocalPoints()).toEqual([]);
+    expect(pairs[1].targetIsPlaceholder).toBe(false);
+    expect(pairs[1].target.leaf).not.toBe(t0);
+    expect(pairs[1].target.leaf.getLocalPoints()).toEqual(t0.getLocalPoints());
 
     expect(pairs[2].source.leaf).toBe(c);
     expect(pairs[2].sourceIsPlaceholder).toBe(false);
-    expect(pairs[2].targetIsPlaceholder).toBe(true);
-    expect(pairs[2].target.leaf.getLocalPoints()).toEqual([]);
+    expect(pairs[2].targetIsPlaceholder).toBe(false);
+    expect(pairs[2].target.leaf).not.toBe(t0);
+    expect(pairs[2].target.leaf.getLocalPoints()).toEqual(t0.getLocalPoints());
+  });
+
+  describe('needsLeafPairing (issue #545: non-VGroup VMobjects that delegate to children)', () => {
+    it('is false for a plain leaf VMobject that owns points directly', () => {
+      const circle = new Circle({ radius: 1 });
+      expect(needsLeafPairing(circle)).toBe(false);
+    });
+
+    it('is true for a VGroup (owns no points, delegates to children)', () => {
+      const group = new VGroup(new Circle({ radius: 1 }));
+      expect(needsLeafPairing(group)).toBe(true);
+    });
+
+    it('is true for a DashedLine: a plain VMobject (not VGroup) that clears its own points and renders via children', () => {
+      const dashed = new DashedLine({ start: [-1, 0, 0], end: [1, 0, 0], dashLength: 0.2 });
+      expect(dashed).not.toBeInstanceOf(VGroup);
+      expect(dashed.hasOwnPoints()).toBe(false);
+      expect(dashed.getDashes().length).toBeGreaterThan(0);
+      expect(needsLeafPairing(dashed)).toBe(true);
+    });
+
+    it('is false for an empty VMobject with neither own points nor children', () => {
+      expect(needsLeafPairing(new VMobject())).toBe(false);
+    });
+  });
+
+  describe('pairLeafSnapshotsByIndex on a non-VGroup container (DashedLine)', () => {
+    it('descends into DashedLine children instead of treating the DashedLine itself as one empty leaf', () => {
+      const source = new DashedLine({ start: [-1, 0, 0], end: [1, 0, 0], dashLength: 0.2 });
+      const target = new DashedLine({ start: [-1, 0, 0], end: [1, 0, 0], dashLength: 0.5 });
+
+      const pairs = pairLeafSnapshotsByIndex(source, target);
+
+      // Every leaf should be a real dash segment (or a real duplicate of
+      // one) -- never the DashedLine container itself, which owns no points.
+      expect(pairs.length).toBe(Math.max(source.getDashes().length, target.getDashes().length));
+      for (const pair of pairs) {
+        expect(pair.source.leaf).not.toBe(source);
+        expect(pair.target.leaf).not.toBe(target);
+        expect(pair.source.leaf.getLocalPoints().length).toBeGreaterThan(0);
+        expect(pair.target.leaf.getLocalPoints().length).toBeGreaterThan(0);
+      }
+    });
   });
 });

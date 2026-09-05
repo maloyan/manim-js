@@ -438,6 +438,17 @@ export class Scene {
     for (const mobject of mobjects) {
       if (!this._mobjects.has(mobject)) {
         this._mobjects.add(mobject);
+        // Set per-instance renderer context for VMobjects (multi-scene support)
+        // BEFORE the first getThreeObject() sync below. _setSceneContext()
+        // only writes plain fields (no Three.js object needed), so this is
+        // safe to do first — and it must go first: getThreeObject() triggers
+        // VMobjectRendering._syncMaterialToThree(), which computes
+        // linewidth/resolution from this context. Doing it after would leave
+        // that first sync using the class-level static fallback (e.g.
+        // frameWidth=14) instead of this scene's real, aspect-corrected
+        // frameWidth, producing a wrong stroke width until something else
+        // happens to re-dirty and resync the mobject later.
+        this._setSceneContextRecursive(mobject);
         const threeObj = mobject.getThreeObject();
         const ro = this._renderOrderCounter++;
         threeObj.renderOrder = ro;
@@ -460,8 +471,6 @@ export class Scene {
         if (!this._isInSceneGraph(threeObj)) {
           this._threeScene.add(threeObj);
         }
-        // Set per-instance renderer context for VMobjects (multi-scene support)
-        this._setSceneContextRecursive(mobject);
         // If mobject or any descendant has pending async rendering (e.g. MathTex),
         // re-render when done. Recursively check children since MathTex objects
         // may be nested inside VGroup/Group containers.

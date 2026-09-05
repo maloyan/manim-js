@@ -114,6 +114,31 @@ export class VMobject extends VMobjectRendering {
   }
 
   /**
+   * Whether this exact node owns drawable geometry (its raw `_points3D`),
+   * bypassing any subclass override of `getLocalPoints()`. VGroup (and every
+   * class extending it — MathTex, SVGMobject, Arrow, Table, ...) overrides
+   * `getLocalPoints()` to aggregate its children's points for read-modify-write
+   * transforms (Homotopy, ApplyWave, ...); that aggregation must NOT make the
+   * container itself look like a stagger unit with points of its own.
+   */
+  protected _hasOwnPoints(): boolean {
+    return this._points3D.length > 0;
+  }
+
+  /**
+   * Public counterpart to {@link _hasOwnPoints}. Lets code outside the
+   * VMobject hierarchy (Transform's strategy selection, leaf-snapshot
+   * traversal) distinguish "this node carries its own geometry" from
+   * "this node delegates entirely to VMobject children" — true not just
+   * for VGroup, but for any VMobject subclass that clears its own points
+   * and renders via children (DashedLine, a multi-component
+   * RegularPolygram, ...).
+   */
+  hasOwnPoints(): boolean {
+    return this._hasOwnPoints();
+  }
+
+  /**
    * Own points in world coordinates (full ancestor S/R/T chain; render-only
    * z-layering offset excluded). Children's points are not included — use
    * {@link getAllPoints} for the full subtree.
@@ -146,6 +171,20 @@ export class VMobject extends VMobjectRendering {
     };
     collect(this);
     return result;
+  }
+
+  /**
+   * Family members (including self) that own points directly — Manim CE's
+   * `family_members_with_points()`. This is the unit that staggered animations
+   * (e.g. Create's lagRatio) should iterate over: a VMobject with several
+   * internal subpaths is still ONE entry here, never split per subpath.
+   *
+   * @post result === this.getFamily().filter(m => m instanceof VMobject && m._hasOwnPoints())
+   */
+  familyMembersWithPoints(): VMobject[] {
+    return this.getFamily().filter(
+      (m): m is VMobject => m instanceof VMobject && m._hasOwnPoints(),
+    );
   }
 
   /**
