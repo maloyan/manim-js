@@ -104,13 +104,33 @@ export class DashedLine extends VMobject {
     const gapLen = this._dashLength * (1 - this._dashRatio);
     const cycleLen = dashLen + gapLen;
 
-    // Generate dashes along the line
-    let currentPos = 0;
-    while (currentPos < totalLength) {
-      const dashStart = currentPos;
-      const dashEnd = Math.min(currentPos + dashLen, totalLength);
+    // Degenerate cycle (e.g. dashLength <= 0): nothing to draw. Also guards
+    // against a division below that would otherwise be Infinity/NaN.
+    if (cycleLen < 1e-10) {
+      this.clearPoints();
+      return;
+    }
 
-      if (dashEnd > dashStart) {
+    // Deterministic dash count: the number of full dash+gap cycles that fit,
+    // plus one final partial dash if a genuine (non-floating-point-noise)
+    // remainder is left over. A single division has at most one rounding
+    // step; the previous implementation accumulated `currentPos += cycleLen`
+    // across every iteration, and that repeated addition drifts under IEEE
+    // 754 double rounding (e.g. totalLength=6, cycleLen=0.3: after 20
+    // additions currentPos lands on 5.999999999999998, one ULP short of 6,
+    // so `while (currentPos < totalLength)` admits a spurious 21st,
+    // near-zero-length dash). Computing each dash's start as `i * cycleLen`
+    // instead never accumulates error across iterations.
+    const EPS = 1e-9;
+    const numFullCycles = Math.floor(totalLength / cycleLen);
+    const remainder = totalLength - numFullCycles * cycleLen;
+    const numDashes = remainder > EPS ? numFullCycles + 1 : numFullCycles;
+
+    for (let i = 0; i < numDashes; i++) {
+      const dashStart = i * cycleLen;
+      const dashEnd = Math.min(dashStart + dashLen, totalLength);
+
+      if (dashEnd - dashStart > EPS) {
         const startPoint: Vector3Tuple = [
           this._start[0] + dirX * dashStart,
           this._start[1] + dirY * dashStart,
@@ -132,8 +152,6 @@ export class DashedLine extends VMobject {
         this._dashes.push(dash);
         this.add(dash);
       }
-
-      currentPos += cycleLen;
     }
 
     // Clear the parent VMobject's own points since we use children for rendering
