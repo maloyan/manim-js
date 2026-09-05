@@ -126,6 +126,19 @@ export class VMobject extends VMobjectRendering {
   }
 
   /**
+   * Public counterpart to {@link _hasOwnPoints}. Lets code outside the
+   * VMobject hierarchy (Transform's strategy selection, leaf-snapshot
+   * traversal) distinguish "this node carries its own geometry" from
+   * "this node delegates entirely to VMobject children" — true not just
+   * for VGroup, but for any VMobject subclass that clears its own points
+   * and renders via children (DashedLine, a multi-component
+   * RegularPolygram, ...).
+   */
+  hasOwnPoints(): boolean {
+    return this._hasOwnPoints();
+  }
+
+  /**
    * Own points in world coordinates (full ancestor S/R/T chain; render-only
    * z-layering offset excluded). Children's points are not included — use
    * {@link getAllPoints} for the full subtree.

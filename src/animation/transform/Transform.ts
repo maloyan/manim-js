@@ -4,7 +4,6 @@
 
 import { Mobject } from '../../core/Mobject';
 import { VMobject } from '../../core/VMobject';
-import { VGroup } from '../../core/VGroup';
 import { PMobject } from '../../mobjects/point/PMobject';
 import { Animation, AnimationOptions, AnimationScene } from '../Animation';
 import { ImageMobject } from '../../mobjects/image';
@@ -15,7 +14,7 @@ import { MorphStrategy } from './MorphStrategy';
 import { PointCloudMorphStrategy } from './PointCloudMorphStrategy';
 import { PointMorphStrategy } from './PointMorphStrategy';
 import { ShapeMorphStrategy } from './ShapeMorphStrategy';
-import { canMorphByPoints } from './TransformPairing';
+import { canMorphByPoints, needsLeafPairing } from './TransformPairing';
 
 export class Transform extends Animation {
   readonly target: Mobject;
@@ -40,9 +39,13 @@ export class Transform extends Animation {
 
   private _vmobjectMorphEligible(): boolean {
     if (!(this.mobject instanceof VMobject && this.target instanceof VMobject)) return false;
+    // Either side can be a leaf with its own points, or a container that
+    // delegates entirely to VMobject children (VGroup, DashedLine, a
+    // multi-component RegularPolygram, ...) — in which case both sides must
+    // delegate, so PointMorphStrategy can pair them up leaf-by-leaf.
     return (
-      (this.mobject instanceof VGroup && this.target instanceof VGroup) ||
-      canMorphByPoints(this.mobject, this.target)
+      canMorphByPoints(this.mobject, this.target) ||
+      (needsLeafPairing(this.mobject) && needsLeafPairing(this.target))
     );
   }
 

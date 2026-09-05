@@ -97,6 +97,18 @@ export function canMorphByPoints(source: VMobject, target: VMobject): boolean {
   return source.getLocalPoints().length > 0 && target.getLocalPoints().length > 0;
 }
 
+/**
+ * True when `m` owns no geometry itself but delegates entirely to VMobject
+ * descendants — VGroup always qualifies, but so does any plain VMobject
+ * subclass that clears its own points and renders via children (DashedLine,
+ * a multi-component RegularPolygram, ...). Such mobjects can't be morphed by
+ * `alignVmobjectPair` (their own point list is empty); they need leaf-by-leaf
+ * pairing instead, via {@link pairLeafSnapshotsByIndex}.
+ */
+export function needsLeafPairing(m: VMobject): boolean {
+  return !m.hasOwnPoints() && m.familyMembersWithPoints().length > 0;
+}
+
 function makePlaceholderSnapshot(reference?: LeafVMobjectSnapshot): LeafVMobjectSnapshot {
   return {
     leaf: new VMobject(),

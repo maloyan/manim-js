@@ -16,8 +16,12 @@ import { TexturedMobject } from '../core/TexturedMobject';
 import { VMobject } from '../core/VMobject';
 import { VGroup } from '../core/VGroup';
 import { Circle } from '../mobjects/geometry/Circle';
+import { DashedLine } from '../mobjects/geometry/DashedLine';
+import { RegularPolygram } from '../mobjects/geometry/PolygonExtensions';
 import { PMobject } from '../mobjects/point/PMobject';
 import { PointCloudMorphStrategy } from './transform/PointCloudMorphStrategy';
+import { PointMorphStrategy } from './transform/PointMorphStrategy';
+import { FadeMorphStrategy } from './transform/FadeMorphStrategy';
 import { ImageMobject } from '../mobjects/image';
 import { Text } from '../mobjects/text/Text';
 import { MathTex } from '../mobjects/text/MathTex';
@@ -1289,6 +1293,95 @@ describe('Transform on VGroup (#206)', () => {
 
       expect(centerB[0]).not.toBeCloseTo(centerC[0], 5);
       expect(centerB[1]).not.toBeCloseTo(centerC[1], 5);
+    });
+  });
+});
+
+describe('Transform on non-VGroup leaf-delegating VMobjects (issue #545)', () => {
+  // Regression for: Transform silently fell back to FadeMorphStrategy for any
+  // VMobject whose geometry is carried entirely by its children (own points
+  // cleared) unless that VMobject also happened to be a VGroup. DashedLine
+  // and a multi-component RegularPolygram both hit this — neither is a
+  // VGroup, and neither has non-empty getLocalPoints() on itself.
+
+  describe('DashedLine (own points empty, geometry in Line children)', () => {
+    it('is not itself a VGroup, and owns no points directly', () => {
+      const dashed = new DashedLine({ start: [-1, 0, 0], end: [1, 0, 0], dashLength: 0.2 });
+      expect(dashed).not.toBeInstanceOf(VGroup);
+      expect(dashed.hasOwnPoints()).toBe(false);
+      expect(dashed.getLocalPoints()).toEqual([]);
+      expect(dashed.getDashes().length).toBeGreaterThan(0);
+    });
+
+    it('selects PointMorphStrategy, not FadeMorphStrategy', () => {
+      const source = new DashedLine({ start: [-1, 0, 0], end: [1, 0, 0], dashLength: 0.2 });
+      const target = new DashedLine({ start: [-2, 1, 0], end: [2, 1, 0], dashLength: 0.2 });
+
+      const t = new Transform(source, target);
+      t.begin();
+
+      const strategy = (t as unknown as { _strategy: unknown })._strategy;
+      expect(strategy).toBeInstanceOf(PointMorphStrategy);
+      expect(strategy).not.toBeInstanceOf(FadeMorphStrategy);
+    });
+
+    it('interpolates each dash geometrically instead of cross-fading the whole line', () => {
+      const source = new DashedLine({ start: [-1, 0, 0], end: [1, 0, 0], dashLength: 0.2 });
+      const target = new DashedLine({ start: [-1, 4, 0], end: [1, 4, 0], dashLength: 0.2 });
+
+      const firstDashStartY = source.getDashes()[0].getLocalPoints()[0][1];
+      expect(firstDashStartY).toBeCloseTo(0, 5);
+
+      const t = new Transform(source, target);
+      t.begin();
+
+      // A real geometric morph moves each dash continuously; a cross-fade
+      // would leave positions untouched and only animate opacity.
+      t.interpolate(0.5);
+      const midY = source.getDashes()[0].getLocalPoints()[0][1];
+      expect(midY).toBeCloseTo(2, 1);
+      expect(source.getDashes()[0].opacity).toBeCloseTo(1, 5);
+
+      t.interpolate(1);
+      t.finish();
+      const finalY = source.getDashes()[0].getLocalPoints()[0][1];
+      expect(finalY).toBeCloseTo(4, 1);
+    });
+
+    it('handles a source/target pair with a different number of dashes without throwing', () => {
+      const source = new DashedLine({ start: [-1, 0, 0], end: [1, 0, 0], dashLength: 0.5 });
+      const target = new DashedLine({ start: [-1, 0, 0], end: [1, 0, 0], dashLength: 0.1 });
+      expect(source.getDashes().length).not.toBe(target.getDashes().length);
+
+      const t = new Transform(source, target);
+      expect(() => {
+        t.begin();
+        t.interpolate(0.5);
+        t.interpolate(1);
+        t.finish();
+      }).not.toThrow();
+    });
+  });
+
+  describe('RegularPolygram with gcd(n,k) > 1 (own points empty, geometry in VMobject children)', () => {
+    it('is not a VGroup, and owns no points directly once it has multiple components', () => {
+      // {6/2} decomposes into gcd(6,2)=2 triangle components, stored as children.
+      const hexagram = new RegularPolygram({ numVertices: 6, density: 2 });
+      expect(hexagram).not.toBeInstanceOf(VGroup);
+      expect(hexagram.hasOwnPoints()).toBe(false);
+      expect(hexagram.children.length).toBe(2);
+    });
+
+    it('selects PointMorphStrategy, not FadeMorphStrategy, for two multi-component polygrams', () => {
+      const source = new RegularPolygram({ numVertices: 6, density: 2, radius: 1 });
+      const target = new RegularPolygram({ numVertices: 6, density: 2, radius: 2 });
+
+      const t = new Transform(source, target);
+      t.begin();
+
+      const strategy = (t as unknown as { _strategy: unknown })._strategy;
+      expect(strategy).toBeInstanceOf(PointMorphStrategy);
+      expect(strategy).not.toBeInstanceOf(FadeMorphStrategy);
     });
   });
 });
