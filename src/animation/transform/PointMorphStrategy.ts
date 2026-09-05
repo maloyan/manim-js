@@ -157,14 +157,28 @@ export class PointMorphStrategy implements MorphStrategy {
     this._targetScale.copy(normalizedTarget.scaleVector);
   }
   private _build(group: VMobject, pair: LeafPairByIndex): VGroupLeafState {
-    const { source: src, target: tgt, sourceIsPlaceholder, targetIsPlaceholder } = pair;
+    const {
+      source: src,
+      target: tgt,
+      sourceIsPlaceholder,
+      targetIsPlaceholder,
+      sourceIsNew,
+    } = pair;
     const sc = src.leaf;
     const tc = tgt.leaf;
     let child: VMobject = sc;
     if (sourceIsPlaceholder) {
+      // Blank filler (only when the source family had zero leaves at all):
+      // start as an invisible copy of the target, fading in in place.
       child = tc.copy() as VMobject;
       child.opacity = 0;
       child.fillOpacity = 0;
+      group.add(child);
+    } else if (sourceIsNew) {
+      // A real duplicate of an existing sibling (Manim CE's
+      // add_n_more_submobjects): already a full, visible VMobject with its
+      // own geometry/style -- just needs to join the scene graph so it can
+      // morph for real toward its own paired target leaf.
       group.add(child);
     }
     const canMorph = canMorphByPoints(sc, tc) && !sourceIsPlaceholder && !targetIsPlaceholder;

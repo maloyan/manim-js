@@ -1163,7 +1163,7 @@ describe('Transform on VGroup (#206)', () => {
     }).not.toThrow();
   });
 
-  it('fades in extra target children when target has more', () => {
+  it('splits an existing child into a real duplicate when target has more (Manim CE add_n_more_submobjects)', () => {
     const c1 = new Circle({ radius: 1 });
     const group = new VGroup(c1);
 
@@ -1175,20 +1175,24 @@ describe('Transform on VGroup (#206)', () => {
     const t = new Transform(group, target);
     t.begin();
 
-    // Source group should now have a placeholder child for the extra target
+    // Source group should now have a real duplicate of c1 for the extra target.
     expect(group.children.length).toBe(2);
+    const duplicate = group.children[1] as VMobject;
+    expect(duplicate).not.toBe(c1);
 
-    // At alpha=0, placeholder should be invisible
+    // The duplicate starts as a full, visible copy of its sibling (c1's
+    // radius-1 geometry) -- never an invisible placeholder.
     t.interpolate(0);
-    const placeholder = group.children[1] as VMobject;
-    expect(placeholder.opacity).toBeCloseTo(0, 5);
+    expect(duplicate.opacity).toBeCloseTo(c1.opacity, 5);
+    expect(duplicate.getBoundingBox().width).toBeCloseTo(2, 3); // radius-1 circle
 
-    // At alpha=1, placeholder should be visible
+    // By alpha=1 it has morphed for real into tc2's shape/position.
     t.interpolate(1);
-    expect(placeholder.opacity).toBeCloseTo(tc2.opacity, 5);
+    expect(duplicate.getBoundingBox().width).toBeCloseTo(1, 3); // radius-0.5 circle
+    expect(duplicate.getCenter()[0]).toBeCloseTo(2, 3);
   });
 
-  it('fades out extra source children when source has more', () => {
+  it('merges an extra source child into a duplicated target when source has more (Manim CE add_n_more_submobjects)', () => {
     const c1 = new Circle({ radius: 1 });
     const c2 = new Circle({ radius: 0.5 });
     const group = new VGroup(c1, c2);
@@ -1200,9 +1204,12 @@ describe('Transform on VGroup (#206)', () => {
     t.begin();
     t.interpolate(1);
 
-    // Extra source child should be faded to invisible
-    expect(c2.opacity).toBeCloseTo(0, 5);
-    expect(c2.fillOpacity).toBeCloseTo(0, 5);
+    // Extra source child morphs for real into a duplicate of tc1 (Manim CE's
+    // "merging" behavior) instead of fading to invisible.
+    expect(c2.opacity).toBeCloseTo(tc1.opacity, 5);
+    expect(c2.fillOpacity).toBeCloseTo(tc1.fillOpacity, 5);
+    expect(c2.getBoundingBox().width).toBeCloseTo(4, 3); // radius-2 circle
+    expect(c2.getCenter()[0]).toBeCloseTo(tc1.getCenter()[0], 3);
   });
 
   it('interpolate at alpha=0 preserves start state', () => {

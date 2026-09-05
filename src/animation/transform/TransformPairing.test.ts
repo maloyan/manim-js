@@ -322,7 +322,7 @@ describe('TransformPairing core', () => {
     expect(aligned.targetPoints[0][1]).toBeCloseTo(-1, 6);
   });
 
-  it('pairLeafSnapshotsByIndex preserves left-to-right leaf order and unmatched tails', () => {
+  it('pairLeafSnapshotsByIndex preserves left-to-right leaf order and pads the shorter side by duplication', () => {
     const a = new Circle({ radius: 1 });
     const b = new Circle({ radius: 0.8 });
     const c = new Circle({ radius: 0.6 });
@@ -339,16 +339,21 @@ describe('TransformPairing core', () => {
     expect(pairs[0].target.leaf).toBe(t0);
     expect(pairs[0].sourceIsPlaceholder).toBe(false);
     expect(pairs[0].targetIsPlaceholder).toBe(false);
+    expect(pairs[0].sourceIsNew).toBe(false);
 
+    // b and c pair with real duplicates of t0 (Manim CE
+    // add_n_more_submobjects), never with blank invisible placeholders.
     expect(pairs[1].source.leaf).toBe(b);
     expect(pairs[1].sourceIsPlaceholder).toBe(false);
-    expect(pairs[1].targetIsPlaceholder).toBe(true);
-    expect(pairs[1].target.leaf.getLocalPoints()).toEqual([]);
+    expect(pairs[1].targetIsPlaceholder).toBe(false);
+    expect(pairs[1].target.leaf).not.toBe(t0);
+    expect(pairs[1].target.leaf.getLocalPoints()).toEqual(t0.getLocalPoints());
 
     expect(pairs[2].source.leaf).toBe(c);
     expect(pairs[2].sourceIsPlaceholder).toBe(false);
-    expect(pairs[2].targetIsPlaceholder).toBe(true);
-    expect(pairs[2].target.leaf.getLocalPoints()).toEqual([]);
+    expect(pairs[2].targetIsPlaceholder).toBe(false);
+    expect(pairs[2].target.leaf).not.toBe(t0);
+    expect(pairs[2].target.leaf.getLocalPoints()).toEqual(t0.getLocalPoints());
   });
 
   describe('needsLeafPairing (issue #545: non-VGroup VMobjects that delegate to children)', () => {
@@ -382,12 +387,14 @@ describe('TransformPairing core', () => {
 
       const pairs = pairLeafSnapshotsByIndex(source, target);
 
-      // Every leaf should be one of the actual dash segments, never the
-      // DashedLine container itself (which owns no points).
+      // Every leaf should be a real dash segment (or a real duplicate of
+      // one) -- never the DashedLine container itself, which owns no points.
       expect(pairs.length).toBe(Math.max(source.getDashes().length, target.getDashes().length));
       for (const pair of pairs) {
-        if (!pair.sourceIsPlaceholder) expect(source.getDashes()).toContain(pair.source.leaf);
-        if (!pair.targetIsPlaceholder) expect(target.getDashes()).toContain(pair.target.leaf);
+        expect(pair.source.leaf).not.toBe(source);
+        expect(pair.target.leaf).not.toBe(target);
+        expect(pair.source.leaf.getLocalPoints().length).toBeGreaterThan(0);
+        expect(pair.target.leaf.getLocalPoints().length).toBeGreaterThan(0);
       }
     });
   });
