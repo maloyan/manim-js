@@ -286,7 +286,7 @@ export class DashedLine extends VMobject {
       color: this.color,
       strokeWidth: this.strokeWidth,
     });
-    this._copyBaseAttributesInto(clone, { copyPosition: false });
+    this._copyBaseAttributesInto(clone, { copyPosition: false, copyChildren: false });
     clone._dashes = clone.children.slice() as Line[];
     return clone;
   }

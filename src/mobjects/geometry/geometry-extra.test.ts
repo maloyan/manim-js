@@ -7,6 +7,7 @@ import { CubicBezier } from './CubicBezier';
 import { Circle } from './Circle';
 import { Dot, SmallDot, LargeDot } from './Dot';
 import { Line } from './Line';
+import { RegularPolygram } from './PolygonExtensions';
 import { BLUE, WHITE } from '../../constants';
 
 // ---------------------------------------------------------------------------
@@ -961,6 +962,11 @@ describe('DashedLine - propagation and copy', () => {
     expect(c.getDashRatio()).toBe(0.7);
     expect(c.color).toBe('#123456');
     expect(c.strokeWidth).toBe(6);
+    // The constructor already rebuilds dashes from the copied endpoint
+    // params -- _copyBaseAttributesInto must not ALSO copy the original's
+    // children on top, or the clone ends up with double the dashes.
+    expect(c.children.length).toBe(dl.children.length);
+    expect(c.getDashes().length).toBe(dl.getDashes().length);
     // Mutating the copy does not affect original
     c.setStart([99, 0, 0]);
     expect(dl.getStart()).toEqual([1, 0, 0]);
@@ -970,5 +976,85 @@ describe('DashedLine - propagation and copy', () => {
     const dl = new DashedLine({ start: [0, 0, 0], end: [3, 0, 0] });
     const c = dl.copy() as DashedLine;
     expect(c.getDashes().length).toBeGreaterThan(0);
+  });
+
+  describe('copy() does not duplicate children (regression)', () => {
+    it('children count matches exactly, before and after, for several dashLength/dashRatio combinations', () => {
+      const cases = [
+        { start: [-3, 0, 0] as const, end: [3, 0, 0] as const, dashLength: 0.3, dashRatio: 0.5 },
+        { start: [-2, 1, 0] as const, end: [2, -1, 0] as const, dashLength: 0.12, dashRatio: 0.3 },
+        { start: [0, 0, 0] as const, end: [1, 0, 0] as const, dashLength: 0.25, dashRatio: 0.9 },
+      ];
+      for (const c of cases) {
+        const dl = new DashedLine(c);
+        const before = dl.children.length;
+        expect(before).toBeGreaterThan(0);
+
+        const clone = dl.copy() as DashedLine;
+
+        // The exact bug this guards: _copyBaseAttributesInto's default
+        // copyChildren=true would re-add the original's (copied) children on
+        // top of the ones the DashedLine constructor already rebuilt from
+        // start/end/dashLength/dashRatio, doubling the count.
+        expect(clone.children.length).toBe(before);
+        expect(clone.getDashes().length).toBe(dl.getDashes().length);
+        expect((clone as unknown as { _dashes: unknown[] })._dashes.length).toBe(
+          clone.children.length,
+        );
+      }
+    });
+
+    it('clone geometry is point-for-point identical to the original, dash by dash', () => {
+      const dl = new DashedLine({
+        start: [-2, 1, 0],
+        end: [3, -1, 0],
+        dashLength: 0.2,
+        dashRatio: 0.6,
+      });
+      const clone = dl.copy() as DashedLine;
+
+      const originalDashes = dl.getDashes();
+      const clonedDashes = clone.getDashes();
+      expect(clonedDashes.length).toBe(originalDashes.length);
+      for (let i = 0; i < originalDashes.length; i++) {
+        expect(clonedDashes[i].getLocalPoints()).toEqual(originalDashes[i].getLocalPoints());
+      }
+    });
+
+    it('preserves start/end/dashLength/dashRatio/color/strokeWidth exactly', () => {
+      const dl = new DashedLine({
+        start: [1, 2, 0],
+        end: [-4, 5, 0],
+        dashLength: 0.17,
+        dashRatio: 0.42,
+        color: '#abcdef',
+        strokeWidth: 9,
+      });
+      const clone = dl.copy() as DashedLine;
+
+      expect(clone.getStart()).toEqual(dl.getStart());
+      expect(clone.getEnd()).toEqual(dl.getEnd());
+      expect(clone.getDashLength()).toBe(dl.getDashLength());
+      expect(clone.getDashRatio()).toBe(dl.getDashRatio());
+      expect(clone.color).toBe(dl.color);
+      expect(clone.strokeWidth).toBe(dl.strokeWidth);
+
+      // Mutating a copied parameter regenerates the clone's own dashes
+      // correctly, independent of the original (constructor-rebuild path
+      // still works after the copyChildren:false change).
+      clone.setDashLength(0.5);
+      expect(clone.getDashLength()).toBe(0.5);
+      expect(dl.getDashLength()).toBe(0.17);
+      expect(clone.getDashes().length).toBeGreaterThan(0);
+    });
+
+    it('does not regress RegularPolygram, the sibling self-rebuilding composite that already used copyChildren:false', () => {
+      const poly = new RegularPolygram({ numVertices: 6, density: 2, radius: 1.5 });
+      const before = poly.children.length;
+      expect(before).toBe(2); // gcd(6,2)=2 components
+
+      const clone = poly.copy();
+      expect(clone.children.length).toBe(before);
+    });
   });
 });
